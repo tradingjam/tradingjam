@@ -336,7 +336,7 @@ const FACTORS = [
   ['Presja kupujących', 'jaka część ostatnich transakcji to zakupy'],
   ['Delta wolumenu (CVD)', 'czy przez ostatnie 12 świec przeważało kupowanie czy sprzedawanie'],
   ['Pozycja w zakresie', 'czy cena jest przy szczycie czy przy dołku z ostatnich 20 świec'],
-  ['Trend Bitcoina (24 godz. i 3 dni)', 'czy cały rynek, czyli BTC, rośnie czy spada'],
+  ['Trend Bitcoina (24 godz., 3 dni i 14 dni)', 'czy cały rynek, czyli BTC, rośnie czy spada'],
   ['Trend z wyższego interwału (24 godz.)', 'trend, RSI i nachylenie średniej ze świec 4h'],
 ];
 
@@ -431,12 +431,15 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
-const UNPROVEN_IV = new Set(['1d', '30d']);
+const UNPROVEN_IV = new Set(['30d']);
+// 14 dni: w backteście przewagę dawały tylko scenariusze zgodne z trendem coina (cena po tej samej stronie EMA50)
+const withCoinTrend = r => r.a && r.a.raw && ((r.d.dir === 'LONG' && r.a.raw.trend > 0) || (r.d.dir === 'SHORT' && r.a.raw.trend < 0));
 const liftOf = d => (d && d.p !== null && d.hist !== null && d.hist !== undefined ? d.p - d.hist : 0);
 function rankTier(r) {
   if (r.d.weak || r.d.tooWide || isExtreme(r.coin) || isIlliquid(r.coin) || (r.a && r.a.regime)) return 2;
   // 14 i 30 dni: backtest nie potwierdził przewagi – bez zielonych scenariuszy
   if (UNPROVEN_IV.has(r.iv)) return 1;
+  if (r.iv === '1d' && !withCoinTrend(r)) return 1;
   // TOP: test wyraźnie zdany (skill ≥ 1%) i przewaga nad normą ≥ 5 pkt – w backteście najlepsza zasada wyboru
   return r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02 && (r.d.skill || 0) >= TOP_SKILL && liftOf(r.d) >= TOP_LIFT ? 0 : 1;
 }
@@ -450,6 +453,7 @@ function rankReason(r) {
   }
   if (r.tier === 0) return { good: true, text: `Dlaczego tu: ${liftTxt} · powyżej progu · test na historii zdany ✓` };
   if (UNPROVEN_IV.has(r.iv)) return { good: false, text: `${liftTxt} · horyzont bez potwierdzonej przewagi w teście na historii` };
+  if (r.iv === '1d' && !withCoinTrend(r)) return { good: false, text: `Niżej na liście: ${liftTxt} · pod prąd trendu coina (na 14 dni liczą się tylko scenariusze zgodne z trendem)` };
   const why = !(r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02) ? 'pod progiem opłacalności' : liftOf(r.d) < TOP_LIFT ? 'przewaga poniżej +5 pkt' : 'test zdany tylko na granicy';
   return { good: false, text: `Niżej na liście: ${liftTxt} · ${why}` };
 }

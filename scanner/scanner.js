@@ -89,7 +89,7 @@ async function main() {
 
   // Kontekst rynku: świece BTC (1h i 4h) – dodatkowe cechy modeli 24 godz. i 3 dni
   const btcK = {};
-  for (const iv of ['1h', '4h']) { try { btcK[iv] = await X.binanceKlines('BTCUSDT', iv, E.HISTORY); } catch (e) { errors.push('BTC ' + iv + ': ' + e.message); } }
+  for (const iv of ['1h', '4h', '1d']) { try { btcK[iv] = await X.binanceKlines('BTCUSDT', iv, E.HISTORY); } catch (e) { errors.push('BTC ' + iv + ': ' + e.message); } }
 
   // ---------- Historia wyników: wczytanie poprzedniej ----------
   let history = [];
@@ -181,7 +181,7 @@ async function main() {
 async function workerMain() {
   const { list, cg, funding, t0, limit, conc } = workerData;
   const pathKeys = new Set(workerData.pathKeys || []);
-  const ctx = workerData.btcK && workerData.btcK['1h'] && workerData.btcK['4h'] ? { '1h': E.btcContext(workerData.btcK['1h']), '4h': E.btcContext(workerData.btcK['4h']) } : null;
+  const ctx = workerData.btcK && workerData.btcK['1h'] && workerData.btcK['4h'] ? { '1h': E.btcContext(workerData.btcK['1h']), '4h': E.btcContext(workerData.btcK['4h']), '1d': workerData.btcK['1d'] ? E.btcContext(workerData.btcK['1d']) : null } : null;
   const onBinance = new Set(workerData.onBinance), onBingx = new Set(workerData.onBingx), onOkx = new Set(workerData.onOkx || []);
   let next = 0;
   async function loop() {
