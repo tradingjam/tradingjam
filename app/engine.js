@@ -510,8 +510,20 @@ function resolvePick(pk, path, now = Date.now()) {
   }
   return pk;
 }
+// Jeden scenariusz na coin + kierunek + horyzont w oknie horyzontu (pierwszy wpis) – bez tego ten sam
+// sygnał wybity stopem i powtórzony godzinę później liczyłby się kilka razy
+function dedupeHistory(list) {
+  const last = new Map(); const out = [];
+  for (const p of [...list].sort((a, b) => a.t - b.t)) {
+    const k = p.ex + p.sym + p.iv + p.dir; const prev = last.get(k);
+    if (prev !== undefined && p.t < prev + (HORIZON_MS[p.iv] || 0)) continue;
+    last.set(k, p.t); out.push(p);
+  }
+  return out;
+}
 // Podsumowanie: liczba trafień i wynik w „jednostkach ryzyka” (R): cel 2:1 = +2R, stop = −1R
-function historyStats(list, iv) {
+function historyStats(list0, iv) {
+  const list = dedupeHistory(list0);
   const cl = list.filter(p => p.iv === iv && p.status !== 'open' && !p.noData);
   const win = cl.filter(p => p.status === 'win').length, loss = cl.filter(p => p.status === 'loss').length;
   const exp = cl.length - win - loss;
@@ -520,7 +532,8 @@ function historyStats(list, iv) {
 }
 
 // Rozbicie wyników na grupy (przewaga, kierunek, zgodność z BTC, giełda)
-function historyBreakdown(list, iv) {
+function historyBreakdown(list0, iv) {
+  const list = dedupeHistory(list0);
   const cl = list.filter(p => p.iv === iv && p.status !== 'open' && !p.noData);
   const grp = (label, f) => { const g = cl.filter(f); const w = g.filter(p => p.status === 'win').length, l = g.filter(p => p.status === 'loss').length; return { label, n: g.length, hit: w + l ? w / (w + l) : null, sumR: g.reduce((a, p) => a + (p.r || 0), 0) }; };
   const withBtc = p => p.btcTrend !== null && p.btcTrend !== undefined;
@@ -537,4 +550,4 @@ function historyBreakdown(list, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };

@@ -650,8 +650,9 @@ function Results() {
   if (err) return <Text style={[s.small, { color: C.down, marginTop: 12 }]}>{err}</Text>;
   if (!hist) return <View style={{ marginTop: 20 }}><ActivityIndicator color={C.accent} /></View>;
   const st = E.historyStats(hist, iv);
-  const closed = hist.filter(p => p.iv === iv && p.status !== 'open' && !p.noData).sort((a, b) => b.closedAt - a.closedAt);
-  const open = hist.filter(p => p.iv === iv && p.status === 'open').sort((a, b) => b.t - a.t);
+  const dh = E.dedupeHistory(hist);
+  const closed = dh.filter(p => p.iv === iv && p.status !== 'open' && !p.noData).sort((a, b) => b.closedAt - a.closedAt);
+  const open = dh.filter(p => p.iv === iv && p.status === 'open').sort((a, b) => b.t - a.t);
   const be = E.MODE_BE.big;
   const money = st.sumR * 10;
   return (

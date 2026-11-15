@@ -8,7 +8,10 @@ const X = require('../app/exchanges.js');
 const I = E._internal;
 
 const IV = process.env.IV || '1h';
-const STEP = { '1h': 36e5, '4h': 4 * 36e5, '1d': 864e5 }[IV];
+const STEP = { '1h': 36e5, '4h': 4 * 36e5, '1d': 864e5, '30d': 864e5 }[IV];
+const BARS = IV === '30d' ? '1d' : IV;           // 30 dni liczone ze świec dziennych
+const SCALE = E.CFG[IV].scale || 1;
+const MIN_BARS = BARS === '1d' ? 500 : 900;
 const N_BINANCE = +(process.env.N_BINANCE || 70), N_BINGX = +(process.env.N_BINGX || 50);
 const MODE = process.env.MODE || 'big';
 const LEV = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] }[MODE]; // [cel, stop] w ATR
@@ -21,7 +24,7 @@ function features(k, ctx, k4) {
   return { Z: I.zscore(F), raw };
 }
 function labels(k, raw, H) {
-  const [tg, st] = LEV;
+  const tg = LEV[0] * SCALE, st = LEV[1] * SCALE;
   return { L: I.outcomes(k, raw, H, tg, st), S: I.outcomes(k, raw, H, st, tg).map(y => (y === null ? null : -y)) };
 }
 // walk-forward per coin: zwraca dla punktów testu p, prior (z przeszłości) i wynik
@@ -45,8 +48,8 @@ async function worker() {
   const btcAtFor = k => { let j = 0; return i => { while (j + 1 < btcCtx.t.length && btcCtx.t[j + 1] <= k.t[i]) j++; if (btcCtx.t[j] > k.t[i]) j = 0; return btcCtx.t[j] <= k.t[i] ? btcCtx.v[j][0] : null; }; };
   for (const t of workerData.list) {
     try {
-      const k = await X.getKlines(t.ex, t.sym, IV, E.HISTORY);
-      if (k.c.length < 900) continue;
+      const k = await X.getKlines(t.ex, t.sym, BARS, E.HISTORY);
+      if (k.c.length < MIN_BARS) continue;
       const k4 = IV === '1h' ? await X.getKlines(t.ex, t.sym, '4h', 1200) : null;
       const recs = {};
       const fAt = btcAtFor(k); const btArr = k.t.map((_, i) => fAt(i)); const bAt = i => btArr[i];
@@ -139,7 +142,7 @@ async function main() {
   let bx = [];
   try { bx = (await X.bingxTickers()).filter(t => t.qv >= 5e5 && !onB.has(E.cleanBase(t.base))).sort((a, b) => b.qv - a.qv).slice(0, N_BINGX); } catch (e) { }
   const list = [...bn, ...bx];
-  const btc = await X.binanceKlines('BTCUSDT', IV, E.HISTORY);
+  const btc = await X.binanceKlines('BTCUSDT', BARS, E.HISTORY);
   console.log(`Horyzont ${IV} (H=${H}) · coinów: ${list.length}`);
   const T = Math.max(1, Math.min(4, os.cpus().length));
   const shards = Array.from({ length: T }, () => []); list.forEach((t, i) => shards[i % T].push(t));
@@ -176,6 +179,7 @@ async function main() {
     'NOWY TOP bez scenariuszy pod prąd BTC': { filter: x => top(x) && !against(x), sort: byLift, top: 10 },
     'NOWY TOP + p ≥ 60%': { filter: x => top(x) && x.p >= 0.6, sort: byLift, top: 10 },
     'NOWY TOP + p ≥ 55%': { filter: x => top(x) && x.p >= 0.55, sort: byLift, top: 10 },
+    'NOWY TOP, BTC silny trend (|t|>2) – tylko w jego stronę': { filter: x => top(x) && !(x.bt !== null && x.bt !== undefined && ((x.side === 'L' && x.bt < -2) || (x.side === 'S' && x.bt > 2))), sort: byLift, top: 10 },
     'NOWY TOP tylko zgodnie z BTC': { filter: x => top(x) && withBtc(x), sort: byLift, top: 10 },
     'APLIKACJA bez pod prąd BTC': { filter: x => passed(x) && x.p > BE + 0.02 && !against(x), sort: byLift, top: 10 },
     'przewaga ≥6 pkt': { filter: x => passed(x) && x.p > BE + 0.02 && x.lift >= 0.06, sort: byLift, top: 10 },

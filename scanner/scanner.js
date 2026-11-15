@@ -138,7 +138,8 @@ async function main() {
     const btcA = btcCoin && btcCoin.res[iv] && !btcCoin.res[iv].error ? btcCoin.res[iv] : null;
     for (const r of E.rankTop(coins, iv, 'all', 10, 'big')) {
       if (r.tier !== 0) continue; // tylko wiarygodne i powyżej progu
-      if (history.some(p => p.status === 'open' && p.ex === r.coin.ex && p.sym === r.coin.sym && p.iv === iv && p.dir === r.d.dir)) continue;
+      // ten sam coin + kierunek + horyzont tylko raz w oknie horyzontu (także po wybiciu stopu)
+      if (history.some(p => p.ex === r.coin.ex && p.sym === r.coin.sym && p.iv === iv && p.dir === r.d.dir && (p.status === 'open' || p.t > now - E.HORIZON_MS[iv]))) continue;
       history.push({
         id: `${now}-${iv}-${r.coin.ex}-${r.coin.sym}-${r.d.dir}`, t: now, end: now + E.HORIZON_MS[iv], iv, mode: 'big',
         ex: r.coin.ex, sym: r.coin.sym, base: r.coin.base, dir: r.d.dir, p: +r.d.p.toFixed(3), hist: r.d.hist !== null ? +r.d.hist.toFixed(3) : null,
