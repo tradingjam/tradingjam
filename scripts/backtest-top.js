@@ -167,6 +167,42 @@ function simulate(coinRecs, rule, H) {
   return { n, hit: win + loss ? win / (win + loss) : 0, avgR: n ? (RW * win - loss) / n : 0 };
 }
 
+// Kalibracja walk-forward: p' = sigmoid(a·logit(p) + b·logit(prior) + c), dopasowana na wspólnych
+// scenariuszach wszystkich coinów, których wynik był już znany (t ≤ chwila − H). Uczy model, ile jego procent jest wart.
+function calibrate(cr, H) {
+  const lg = x => { const q = Math.min(0.99, Math.max(0.01, x)); return Math.log(q / (1 - q)); };
+  const all = []; for (const c of cr) for (const side of ['L', 'S']) for (const r of c[side]) all.push(r);
+  all.sort((a, b) => a.t - b.t);
+  const map = new Map(); let w = [1, 0, 0];
+  const fit = tr => { // kilka kroków Newtona na regresji logistycznej (3 parametry, lekka regularizacja do [1,0,0])
+    let W = [1, 0, 0];
+    for (let it = 0; it < 15; it++) {
+      const g = [0, 0, 0], Hm = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(r => r.map(v => v * 5));
+      for (let d = 0; d < 3; d++) g[d] = 5 * (W[d] - [1, 0, 0][d]);
+      for (const r of tr) { const x = [lg(r.p), lg(r.prior), 1]; const z = W[0] * x[0] + W[1] * x[1] + W[2]; const q = 1 / (1 + Math.exp(-z)); const y = r.y === 1 ? 1 : 0;
+        for (let a = 0; a < 3; a++) { g[a] += (q - y) * x[a]; for (let b = 0; b < 3; b++) Hm[a][b] += q * (1 - q) * x[a] * x[b]; } }
+      // rozwiązanie 3×3
+      const A = Hm.map((r, i) => [...r, g[i]]);
+      for (let i = 0; i < 3; i++) { let m = i; for (let k = i + 1; k < 3; k++) if (Math.abs(A[k][i]) > Math.abs(A[m][i])) m = k; [A[i], A[m]] = [A[m], A[i]];
+        for (let k = 0; k < 3; k++) if (k !== i) { const f = A[k][i] / A[i][i]; for (let j = i; j < 4; j++) A[k][j] -= f * A[i][j]; } }
+      const step = A.map((r, i) => r[3] / r[i]); W = W.map((v, i) => v - step[i]);
+    }
+    return W;
+  };
+  let ptr = 0; const tStart = all.length ? all[0].t : 0; let nextFit = tStart;
+  for (let i = 0; i < all.length; i++) {
+    const r = all[i];
+    if (r.t >= nextFit) {
+      const tr = []; for (const x of all) { if (x.t > r.t - H * STEP) break; tr.push(x); }
+      w = tr.length >= 1000 ? fit(tr.length > 20000 ? tr.slice(-20000) : tr) : [1, 0, 0];
+      nextFit = r.t + REFIT * STEP;
+    }
+    const z = w[0] * lg(r.p) + w[1] * lg(r.prior) + w[2];
+    map.set(r, 1 / (1 + Math.exp(-z)));
+  }
+  return cr.map(c => ({ coin: c.coin, L: c.L.map(r => ({ ...r, p: map.get(r) })), S: c.S.map(r => ({ ...r, p: map.get(r) })) }));
+}
+
 async function main() {
   const t0 = Date.now(); const H = E.CFG[IV].H;
   const bn = (await X.binanceTickers()).filter(t => t.qv >= 3e6).sort((a, b) => b.qv - a.qv).slice(0, N_BINANCE);
@@ -209,6 +245,8 @@ async function main() {
     const cr = coins.filter(c => c.recs[name]).map(c => ({ coin: c.coin, L: c.recs[name].L, S: c.recs[name].S }));
     if (cr.length) variants[name] = cr;
   }
+  // wersje skalibrowane dla modeli z aplikacji
+  for (const name of ['mtfbtc', 'btc', 'btcext', 'base']) if (variants[name] && (name === { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btcext', '30d': 'btcext' }[IV])) variants[name + '+kalibracja'] = calibrate(variants[name], H);
 
   const byLift = (a, b) => b.lift - a.lift || b.p - a.p;
   const byP = (a, b) => b.p - a.p;
