@@ -10,7 +10,10 @@ const I = E._internal;
 const IV = process.env.IV || '1h';
 const STEP = { '1h': 36e5, '4h': 4 * 36e5, '1d': 864e5 }[IV];
 const N_BINANCE = +(process.env.N_BINANCE || 70), N_BINGX = +(process.env.N_BINGX || 50);
-const VALID_N = 1000, REFIT = 200, BE = 1 / 3;
+const MODE = process.env.MODE || 'big';
+const LEV = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] }[MODE]; // [cel, stop] w ATR
+const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
+const VALID_N = 1000, REFIT = 200, BE = LEV[1] / (LEV[0] + LEV[1]);
 
 // ---------- Wątek: dane i predykcje per coin ----------
 function features(k, ctx, k4) {
@@ -18,7 +21,7 @@ function features(k, ctx, k4) {
   return { Z: I.zscore(F), raw };
 }
 function labels(k, raw, H) {
-  const tg = E.BIG.target, st = E.BIG.stop;
+  const [tg, st] = LEV;
   return { L: I.outcomes(k, raw, H, tg, st), S: I.outcomes(k, raw, H, st, tg).map(y => (y === null ? null : -y)) };
 }
 // walk-forward per coin: zwraca dla punktów testu p, prior (z przeszłości) i wynik
@@ -126,7 +129,7 @@ function simulate(coinRecs, rule, H) {
     }
   }
   const n = win + loss + none;
-  return { n, hit: win + loss ? win / (win + loss) : 0, avgR: n ? (2 * win - loss) / n : 0 };
+  return { n, hit: win + loss ? win / (win + loss) : 0, avgR: n ? (RW * win - loss) / n : 0 };
 }
 
 async function main() {
@@ -171,11 +174,13 @@ async function main() {
     'przewaga ≥5 pkt + skill ≥1%': { filter: x => x.rskill !== null && x.rskill >= 0.01 && x.p > BE + 0.02 && x.lift >= 0.05, sort: byLift, top: 10 },
     'NOWY TOP (≥5 pkt + skill ≥1%)': { filter: top, sort: byLift, top: 10 },
     'NOWY TOP bez scenariuszy pod prąd BTC': { filter: x => top(x) && !against(x), sort: byLift, top: 10 },
+    'NOWY TOP + p ≥ 60%': { filter: x => top(x) && x.p >= 0.6, sort: byLift, top: 10 },
+    'NOWY TOP + p ≥ 55%': { filter: x => top(x) && x.p >= 0.55, sort: byLift, top: 10 },
     'NOWY TOP tylko zgodnie z BTC': { filter: x => top(x) && withBtc(x), sort: byLift, top: 10 },
     'APLIKACJA bez pod prąd BTC': { filter: x => passed(x) && x.p > BE + 0.02 && !against(x), sort: byLift, top: 10 },
     'przewaga ≥6 pkt': { filter: x => passed(x) && x.p > BE + 0.02 && x.lift >= 0.06, sort: byLift, top: 10 },
   };
-  console.log('\nTryb 2:1 · próg opłacalności 33% · wynik R: cel +2, stop −1, brak rozstrzygnięcia 0');
+  console.log(`\nUkład ${MODE} (cel ${LEV[0]}×ATR, stop ${LEV[1]}×ATR) · próg opłacalności ${(BE * 100).toFixed(0)}% · wynik R: cel +${RW}, stop −1, brak rozstrzygnięcia 0`);
   for (const [vn, cr] of Object.entries(variants)) {
     console.log(`\n=== MODEL: ${vn} ===`);
     for (const [rn, rule] of Object.entries(rules)) {
