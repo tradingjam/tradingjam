@@ -994,6 +994,12 @@ export default function App() {
         {tab === 'top' ? (
           <View>
             <Text style={s.h2}>TOP 10 scenariuszy na {horizonTxt}{catF !== 'all' ? ` · ${E.CATS[catF].label}` : ''}</Text>
+            {E.UNPROVEN_IV.has(iv) ? (
+              <View style={[s.box, { borderColor: C.warn, marginBottom: 8 }]}>
+                <Text style={{ color: C.warn, fontWeight: '800' }}>⚠ {horizonTxt}: brak potwierdzonej przewagi</Text>
+                <Text style={[s.li, { marginTop: 4 }]}>Sprawdziliśmy ten horyzont na historii ok. 70 coinów: scenariusze wypadały mniej więcej na zero. Dlatego tu nie ma zielonych scenariuszy – lista pokazuje statystykę jako ciekawostkę, a nie wskazówkę. Wiarygodniejsze są horyzonty 24 godz. i 3 dni.</Text>
+              </View>
+            ) : null}
             <Text style={[s.small, { marginBottom: 6 }]}>Kolejność: najpierw scenariusze, które wyraźnie przeszły test na historii, są powyżej progu i mają przewagę ≥ +5 pkt – od największej przewagi nad normą (jak bardzo obecny wykres zwiększa szansę w porównaniu ze zwykłym zachowaniem coina). Coiny z ostrzeżeniami są na końcu.</Text>
             {top.length === 0 && !status ? <Text style={s.small}>{coins.length ? 'Dane dla tego rodzaju celu pojawią się po najbliższym skanie (co godzinę).' : 'Brak wyników.'}</Text> : null}
             {top.map((row, i) => (

@@ -422,7 +422,7 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   for (const c of coins) {
     const a = c.res && c.res[iv];
     const d = dirOf(a, mode, dir === 'all' ? null : dir); if (!d || d.p === null) continue;
-    rows.push({ coin: c, a, d });
+    rows.push({ coin: c, a, d, iv });
   }
   // Kolejność: 0 = wiarygodny i powyżej progu, 1 = wiarygodny pod progiem, 2 = z ostrzeżeniem.
   // W grupie: największa przewaga nad normą („teraz − normalnie”), potem wyższy procent.
@@ -431,9 +431,12 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
+const UNPROVEN_IV = new Set(['1d', '30d']);
 const liftOf = d => (d && d.p !== null && d.hist !== null && d.hist !== undefined ? d.p - d.hist : 0);
 function rankTier(r) {
   if (r.d.weak || r.d.tooWide || isExtreme(r.coin) || isIlliquid(r.coin) || (r.a && r.a.regime)) return 2;
+  // 14 i 30 dni: backtest nie potwierdził przewagi – bez zielonych scenariuszy
+  if (UNPROVEN_IV.has(r.iv)) return 1;
   // TOP: test wyraźnie zdany (skill ≥ 1%) i przewaga nad normą ≥ 5 pkt – w backteście najlepsza zasada wyboru
   return r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02 && (r.d.skill || 0) >= TOP_SKILL && liftOf(r.d) >= TOP_LIFT ? 0 : 1;
 }
@@ -446,6 +449,7 @@ function rankReason(r) {
     return { good: false, text: `Na końcu listy: ${why}` };
   }
   if (r.tier === 0) return { good: true, text: `Dlaczego tu: ${liftTxt} · powyżej progu · test na historii zdany ✓` };
+  if (UNPROVEN_IV.has(r.iv)) return { good: false, text: `${liftTxt} · horyzont bez potwierdzonej przewagi w teście na historii` };
   const why = !(r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02) ? 'pod progiem opłacalności' : liftOf(r.d) < TOP_LIFT ? 'przewaga poniżej +5 pkt' : 'test zdany tylko na granicy';
   return { good: false, text: `Niżej na liście: ${liftTxt} · ${why}` };
 }
@@ -550,4 +554,4 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
