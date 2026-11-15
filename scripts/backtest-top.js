@@ -83,6 +83,16 @@ async function worker() {
         const fbb = features(k, both); run('btcbreadth', fbb.Z, fbb.raw, 0.3);
       }
       if (BARS === '1d') { try { const ext = extCtx(k, workerData.btc, btcCtx); if (ext.t.length > 300) { const fe = features(k, ext); run('btcext', fe.Z, fe.raw, 0.3); } } catch (e) { } }
+      if (BARS !== '1d' && workerData.btcD) {
+        try {
+          const kd = await X.getKlines(t.ex, t.sym, '1d', E.HISTORY);
+          const cx = E.withDailyExt(btcCtx, kd, workerData.btcD);
+          if (cx !== btcCtx) {
+            if (k4) { const f = features(k, cx, k4); run('mtfbtcext', f.Z, f.raw, 0.3); }
+            else { const f = features(k, cx); run('btcext', f.Z, f.raw, 0.3); }
+          }
+        } catch (e) { }
+      }
       if (k4) { const fm = features(k, null, k4); run('mtf', fm.Z, fm.raw, 0.3); const fmb = features(k, btcCtx, k4); run('mtfbtc', fmb.Z, fmb.raw, 0.3); }
       // dane do modelu wspólnego (wszystkie coiny razem)
       const pool = { t: [], Z: [], L: [], S: [] };
@@ -165,6 +175,7 @@ async function main() {
   try { bx = (await X.bingxTickers()).filter(t => t.qv >= 5e5 && !onB.has(E.cleanBase(t.base))).sort((a, b) => b.qv - a.qv).slice(0, N_BINGX); } catch (e) { }
   const list = [...bn, ...bx];
   const btc = await X.binanceKlines('BTCUSDT', BARS, E.HISTORY);
+  const btcD = BARS === '1d' ? null : await X.binanceKlines('BTCUSDT', '1d', E.HISTORY);
   // świece dzienne: pobieramy wszystko od razu i liczymy nastrój rynku (odsetek coinów nad EMA50)
   let kl = null, breadth = null;
   if (BARS === '1d') {
@@ -187,14 +198,14 @@ async function main() {
   const shards = Array.from({ length: T }, () => []); list.forEach((t, i) => shards[i % T].push(t));
   const coins = [];
   await Promise.all(shards.map(sh => new Promise(res => {
-    const w = new Worker(__filename, { workerData: { list: sh, btc, kl: kl ? Object.fromEntries(sh.map(t => [t.ex + t.sym, kl[t.ex + t.sym]])) : null, breadth } });
+    const w = new Worker(__filename, { workerData: { list: sh, btc, btcD, kl: kl ? Object.fromEntries(sh.map(t => [t.ex + t.sym, kl[t.ex + t.sym]])) : null, breadth } });
     w.on('message', m => coins.push(m)); w.on('exit', res); w.on('error', e => { console.log('wątek:', e.message); res(); });
   })));
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
   const variants = {};
-  for (const name of ['base', 'btc', 'btcext', 'mtf', 'mtfbtc', 'breadth', 'btcbreadth']) {
+  for (const name of ['base', 'btc', 'btcext', 'mtf', 'mtfbtc', 'mtfbtcext', 'breadth', 'btcbreadth']) {
     const cr = coins.filter(c => c.recs[name]).map(c => ({ coin: c.coin, L: c.recs[name].L, S: c.recs[name].S }));
     if (cr.length) variants[name] = cr;
   }

@@ -367,6 +367,21 @@ function extCtx(k, btcK, btcCtx) {
   return out;
 }
 
+// Wskaźniki długiego trendu ze świec dziennych dołożone do kontekstu BTC dla 24 godz. i 3 dni.
+// Wartość dnia jest dostępna dopiero po zamknięciu świecy dziennej (bez zaglądania w przyszłość).
+function withDailyExt(ctx, kd, btcD) {
+  if (!ctx || !kd || !btcD || kd.c.length < 260) return ctx;
+  const ext = extCtx(kd, btcD, btcContext(btcD)); if (ext.t.length < 30) return ctx;
+  const et = ext.t.map(t => t + 864e5), ev = ext.v.map(v => v.slice(2));
+  const out = { t: [], v: [] }; let j = -1;
+  for (let i = 0; i < ctx.t.length; i++) {
+    while (j + 1 < et.length && et[j + 1] <= ctx.t[i]) j++;
+    if (j < 0) continue;
+    out.t.push(ctx.t[i]); out.v.push([...ctx.v[i], ...ev[j]]);
+  }
+  return out.t.length ? out : ctx;
+}
+
 // ---------- Wynik w zwartej postaci (do JSON i do UI) ----------
 const r4 = x => (x === null || x === undefined || !isFinite(x) ? null : Math.round(x * 1e4) / 1e4);
 const sig = x => (x === null || !isFinite(x) ? null : +x.toPrecision(6));
@@ -609,4 +624,4 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
