@@ -14,7 +14,11 @@ const SCALE = E.CFG[IV].scale || 1;
 const MIN_BARS = BARS === '1d' ? 500 : 900;
 const N_BINANCE = +(process.env.N_BINANCE || 70), N_BINGX = +(process.env.N_BINGX || 50);
 const MODE = process.env.MODE || 'big';
-const LEV = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] }[MODE]; // [cel, stop] w ATR
+const LEVS = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] };
+const AUTO = MODE === 'auto';            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
+const LEV = LEVS[AUTO ? 'big' : MODE]; // [cel, stop] w ATR
+// model jak w aplikacji dla danego horyzontu
+const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
 const VALID_N = 1000, REFIT = 200, BE = LEV[1] / (LEV[0] + LEV[1]);
 
@@ -23,8 +27,8 @@ function features(k, ctx, k4) {
   const { F, raw } = I.buildFeatures(k, ctx, k4);
   return { Z: I.zscore(F), raw };
 }
-function labels(k, raw, H) {
-  const tg = LEV[0] * SCALE, st = LEV[1] * SCALE;
+function labels(k, raw, H, lev = LEV) {
+  const tg = lev[0] * SCALE, st = lev[1] * SCALE;
   return { L: I.outcomes(k, raw, H, tg, st), S: I.outcomes(k, raw, H, st, tg).map(y => (y === null ? null : -y)) };
 }
 // walk-forward per coin: zwraca dla punktów testu p, prior (z przeszłości) i wynik
@@ -57,12 +61,18 @@ async function worker() {
       // nastrój rynku (dla świec dziennych): odsetek coinów nad EMA50 i jego zmiana z 5 dni
       const brCtx = workerData.breadth || null; let brArr = null;
       if (brCtx) { let j = 0; brArr = k.t.map(tt => { while (j + 1 < brCtx.t.length && brCtx.t[j + 1] <= tt) j++; return brCtx.t[j] <= tt ? brCtx.v[j][0] : null; }); }
-      const run = (name, Z, raw, l2) => { walk.raw = raw; walk.br = brArr ? (i => brArr[i]) : null;
-        const Y = labels(k, raw, H); const lab = Y => { const a = []; for (let i = 0; i < k.c.length - 1 - H; i++) if (Z[i] && Y[i] !== null) a.push(i); return a; };
+      const run = (name, Z, raw, l2, lev) => { walk.raw = raw; walk.br = brArr ? (i => brArr[i]) : null;
+        const Y = labels(k, raw, H, lev); const lab = Y => { const a = []; for (let i = 0; i < k.c.length - 1 - H; i++) if (Z[i] && Y[i] !== null) a.push(i); return a; };
         const lL = lab(Y.L), lS = lab(Y.S);
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (AUTO) {
+        const ctxOf = { base: [k], btc: [k, btcCtx], mtfbtc: [k, btcCtx, k4] };
+        const names = IV === '30d' ? ['base', 'btc'] : [PROD];
+        for (const nm of names) { const f = features(...ctxOf[nm]); for (const ly of ['big', 'equal', 'safe']) run(nm + '|' + ly, f.Z, f.raw, 0.3, LEVS[ly]); }
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs, pool: null }); continue;
+      }
       const base = features(k); const b = run('base', base.Z, base.raw, 0.3);
       const fb = features(k, btcCtx); run('btc', fb.Z, fb.raw, 0.3);
       if (brCtx) {
@@ -180,6 +190,7 @@ async function main() {
   })));
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
+  if (AUTO) return autoReport(coins, H, t0);
   const variants = {};
   for (const name of ['base', 'btc', 'mtf', 'mtfbtc', 'breadth', 'btcbreadth']) {
     const cr = coins.filter(c => c.recs[name]).map(c => ({ coin: c.coin, L: c.recs[name].L, S: c.recs[name].S }));
@@ -222,6 +233,64 @@ async function main() {
       if (!/^NOWY TOP|^APLIKACJA/.test(rn)) continue;
       const r = simulate(cr, rule, H);
       console.log(`${rn.padEnd(46)} scenariuszy ${String(r.n).padStart(5)} | trafione ${(r.hit * 100).toFixed(1)}% | średnio ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(3)}R`);
+    }
+  }
+  console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`);
+}
+
+// ---------- Tryb auto: porównanie stałych układów z automatycznym wyborem ----------
+function autoReport(coins, H, t0) {
+  const RWL = { big: 2, equal: 1, safe: 0.5 }, BEL = { big: 1 / 3, equal: 0.5, safe: 2 / 3 };
+  const ev = x => x.p * (x.rw + 1) - 1;   // oczekiwany wynik w R przy tej szansie
+  const names = [...new Set(coins.flatMap(c => Object.keys(c.recs).map(k => k.split('|')[0])))];
+  const top = x => x.rskill !== null && x.rskill >= 0.01 && x.p > x.be + 0.02 && x.p - x.prior >= 0.05;
+  const trend = x => x.ct !== null && ((x.side === 'L' && x.ct > 0) || (x.side === 'S' && x.ct < 0));
+  for (const nm of names) {
+    // kandydaci: czas → coin → lista (układ × kierunek)
+    const byT = new Map();
+    for (const c of coins) for (const ly of ['big', 'equal', 'safe']) {
+      const R = c.recs[nm + '|' + ly]; if (!R) continue;
+      for (const side of ['L', 'S']) for (const r of R[side]) {
+        if (!byT.has(r.t)) byT.set(r.t, new Map()); const m = byT.get(r.t);
+        if (!m.has(c.coin)) m.set(c.coin, []);
+        m.get(c.coin).push({ coin: c.coin, side, ly, rw: RWL[ly], be: BEL[ly], ...r, lift: r.p - r.prior });
+      }
+    }
+    const times = [...byT.keys()].sort((a, b) => a - b);
+    const sim = (allow, pick, sort, extra = () => true) => {
+      const blocked = new Map(); let win = 0, loss = 0, none = 0, sumR = 0; const used = { big: 0, equal: 0, safe: 0 };
+      for (const t of times) {
+        const cands = [];
+        for (const list of byT.get(t).values()) {
+          const ok = list.filter(x => allow(x.ly) && top(x) && extra(x)); if (!ok.length) continue;
+          cands.push(ok.sort(pick)[0]);
+        }
+        cands.sort(sort); let taken = 0;
+        for (const x of cands) {
+          if (taken >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue;
+          blocked.set(key, t + H * STEP); taken++; used[x.ly]++;
+          if (x.y === 1) { win++; sumR += x.rw; } else if (x.y === -1) { loss++; sumR -= 1; } else none++;
+        }
+      }
+      const n = win + loss + none;
+      return { n, hit: win + loss ? win / (win + loss) : 0, avgR: n ? sumR / n : 0, used };
+    };
+    const byLift = (a, b) => b.lift - a.lift || b.p - a.p, byEV = (a, b) => ev(b) - ev(a) || b.lift - a.lift;
+    const rows = [
+      ['stały 2:1', l => l === 'big', byLift, byLift],
+      ['stały 1:1', l => l === 'equal', byLift, byLift],
+      ['stały 1:2', l => l === 'safe', byLift, byLift],
+      ['AUTO: najlepszy układ coina, TOP wg zysku', () => true, byEV, byEV],
+      ['AUTO: najlepszy układ coina, TOP wg przewagi', () => true, byEV, byLift],
+      ['AUTO tylko 2:1 lub 1:1, wg zysku', l => l !== 'safe', byEV, byEV],
+    ];
+    console.log(`\n=== MODEL: ${nm} · horyzont ${IV} ===`);
+    for (const tr of [false, true]) {
+      if (tr) console.log('--- tylko scenariusze zgodne z trendem coina ---');
+      for (const [label, allow, pick, sort] of rows) {
+        const r = sim(allow, pick, sort, tr ? trend : undefined);
+        console.log(`${label.padEnd(44)} scen. ${String(r.n).padStart(5)} | trafione ${(r.hit * 100).toFixed(1)}% | średnio ${r.avgR >= 0 ? '+' : ''}${r.avgR.toFixed(3)}R | układy 2:1/1:1/1:2: ${r.used.big}/${r.used.equal}/${r.used.safe}`);
+      }
     }
   }
   console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`);
