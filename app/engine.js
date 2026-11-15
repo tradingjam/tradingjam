@@ -120,7 +120,7 @@ function buildFeatures(k, ctx, k4) {
     if (ctx) {
       while (jb + 1 < ctx.t.length && ctx.t[jb + 1] <= k.t[i]) jb++;
       if (!ctx.t.length || ctx.t[jb] > k.t[i]) { F[i] = null; raw[i] = null; continue; }
-      const b = ctx.v[jb]; F[i].push(b[0], b[1]); r.btcTrend = b[0];
+      const b = ctx.v[jb]; F[i].push(...b); r.btcTrend = b[0];
     }
   }
   return { F, raw };

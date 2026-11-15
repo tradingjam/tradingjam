@@ -36,7 +36,7 @@ function walk(Z, Y, lab, H, l2, btcAt) {
     if (t - fittedAt >= REFIT) { model = I.fitModel(Z, Y, lab.filter(i => i <= t - H), model && model.W, l2); fittedAt = t; }
     const p = I.predictP(model, Z[t]);
     const rskill = n >= 100 && bb > 0 ? 1 - bm / bb : null;
-    out.push({ i: t, p: p[0], prior: model.prior[0], y: Y[t], rskill, bt: btcAt ? btcAt(t) : null });
+    out.push({ i: t, p: p[0], prior: model.prior[0], y: Y[t], rskill, bt: btcAt ? btcAt(t) : null, ct: walk.raw && walk.raw[t] ? walk.raw[t].trend : null, br: walk.br ? walk.br(t) : null });
     // skill liczony tylko z wcześniejszych punktów testu (bez zaglądania w przyszłość)
     if (t + H <= vs[vs.length - 1]) { bm += I.brier(p, Y[t]); bb += I.brier(model.prior, Y[t]); n++; }
   }
@@ -48,12 +48,16 @@ async function worker() {
   const btcAtFor = k => { let j = 0; return i => { while (j + 1 < btcCtx.t.length && btcCtx.t[j + 1] <= k.t[i]) j++; if (btcCtx.t[j] > k.t[i]) j = 0; return btcCtx.t[j] <= k.t[i] ? btcCtx.v[j][0] : null; }; };
   for (const t of workerData.list) {
     try {
-      const k = await X.getKlines(t.ex, t.sym, BARS, E.HISTORY);
+      const k = workerData.kl ? workerData.kl[t.ex + t.sym] : await X.getKlines(t.ex, t.sym, BARS, E.HISTORY);
+      if (!k) continue;
       if (k.c.length < MIN_BARS) continue;
       const k4 = IV === '1h' ? await X.getKlines(t.ex, t.sym, '4h', 1200) : null;
       const recs = {};
       const fAt = btcAtFor(k); const btArr = k.t.map((_, i) => fAt(i)); const bAt = i => btArr[i];
-      const run = (name, Z, raw, l2) => {
+      // nastrój rynku (dla świec dziennych): odsetek coinów nad EMA50 i jego zmiana z 5 dni
+      const brCtx = workerData.breadth || null; let brArr = null;
+      if (brCtx) { let j = 0; brArr = k.t.map(tt => { while (j + 1 < brCtx.t.length && brCtx.t[j + 1] <= tt) j++; return brCtx.t[j] <= tt ? brCtx.v[j][0] : null; }); }
+      const run = (name, Z, raw, l2) => { walk.raw = raw; walk.br = brArr ? (i => brArr[i]) : null;
         const Y = labels(k, raw, H); const lab = Y => { const a = []; for (let i = 0; i < k.c.length - 1 - H; i++) if (Z[i] && Y[i] !== null) a.push(i); return a; };
         const lL = lab(Y.L), lS = lab(Y.S);
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
@@ -61,6 +65,12 @@ async function worker() {
       };
       const base = features(k); const b = run('base', base.Z, base.raw, 0.3);
       const fb = features(k, btcCtx); run('btc', fb.Z, fb.raw, 0.3);
+      if (brCtx) {
+        const fbr = features(k, brCtx); run('breadth', fbr.Z, fbr.raw, 0.3);
+        const both = { t: btcCtx.t, v: btcCtx.v.map((v, i) => { const tt = btcCtx.t[i]; let lo = 0, hi = brCtx.t.length - 1, j = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (brCtx.t[m] <= tt) { j = m; lo = m + 1; } else hi = m - 1; } return j >= 0 ? [...v, ...brCtx.v[j]] : null; }) };
+        both.t = both.t.filter((_, i) => both.v[i]); both.v = both.v.filter(Boolean);
+        const fbb = features(k, both); run('btcbreadth', fbb.Z, fbb.raw, 0.3);
+      }
       if (k4) { const fm = features(k, null, k4); run('mtf', fm.Z, fm.raw, 0.3); const fmb = features(k, btcCtx, k4); run('mtfbtc', fmb.Z, fmb.raw, 0.3); }
       // dane do modelu wspólnego (wszystkie coiny razem)
       const pool = { t: [], Z: [], L: [], S: [] };
@@ -143,18 +153,35 @@ async function main() {
   try { bx = (await X.bingxTickers()).filter(t => t.qv >= 5e5 && !onB.has(E.cleanBase(t.base))).sort((a, b) => b.qv - a.qv).slice(0, N_BINGX); } catch (e) { }
   const list = [...bn, ...bx];
   const btc = await X.binanceKlines('BTCUSDT', BARS, E.HISTORY);
+  // świece dzienne: pobieramy wszystko od razu i liczymy nastrój rynku (odsetek coinów nad EMA50)
+  let kl = null, breadth = null;
+  if (BARS === '1d') {
+    kl = {}; for (const t of list) { try { kl[t.ex + t.sym] = await X.getKlines(t.ex, t.sym, '1d', E.HISTORY); } catch (e) { } }
+    const days = new Map();
+    for (const k of Object.values(kl)) {
+      if (!k || k.c.length < 60) continue;
+      let e = k.c[0]; const a = 2 / 51;
+      for (let i = 0; i < k.c.length; i++) { e = i ? a * k.c[i] + (1 - a) * e : e; if (i < 50) continue; const d = days.get(k.t[i]) || [0, 0]; d[0] += k.c[i] > e ? 1 : 0; d[1]++; days.set(k.t[i], d); }
+    }
+    const need = Math.min(15, Math.ceil(Object.keys(kl).length / 2));
+    const ts = [...days.keys()].filter(t => days.get(t)[1] >= need).sort((a, b) => a - b);
+    const br = ts.map(t => days.get(t)[0] / days.get(t)[1]);
+    breadth = { t: ts.slice(5), v: br.slice(5).map((b, i) => [b - 0.5, b - br[i]]) };
+    if (breadth.t.length < 100) breadth = null;
+    console.log(`Nastrój rynku: ${ts.length} dni${br.length ? `, teraz ${(br[br.length - 1] * 100).toFixed(0)}% coinów nad EMA50` : ''}`);
+  }
   console.log(`Horyzont ${IV} (H=${H}) · coinów: ${list.length}`);
   const T = Math.max(1, Math.min(4, os.cpus().length));
   const shards = Array.from({ length: T }, () => []); list.forEach((t, i) => shards[i % T].push(t));
   const coins = [];
   await Promise.all(shards.map(sh => new Promise(res => {
-    const w = new Worker(__filename, { workerData: { list: sh, btc } });
+    const w = new Worker(__filename, { workerData: { list: sh, btc, kl: kl ? Object.fromEntries(sh.map(t => [t.ex + t.sym, kl[t.ex + t.sym]])) : null, breadth } });
     w.on('message', m => coins.push(m)); w.on('exit', res); w.on('error', e => { console.log('wątek:', e.message); res(); });
   })));
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   const variants = {};
-  for (const name of ['base', 'btc', 'mtf', 'mtfbtc']) {
+  for (const name of ['base', 'btc', 'mtf', 'mtfbtc', 'breadth', 'btcbreadth']) {
     const cr = coins.filter(c => c.recs[name]).map(c => ({ coin: c.coin, L: c.recs[name].L, S: c.recs[name].S }));
     if (cr.length) variants[name] = cr;
   }
@@ -164,6 +191,7 @@ async function main() {
   const passed = x => x.rskill !== null && x.rskill > 0;
   const top = x => x.rskill !== null && x.rskill >= 0.01 && x.p > BE + 0.02 && x.lift >= 0.05;
   const against = x => x.bt !== null && x.bt !== undefined && ((x.side === 'L' && x.bt < -0.5) || (x.side === 'S' && x.bt > 0.5));
+  const withBtcOrFlat = x => x.bt === null || x.bt === undefined || !((x.side === 'L' && x.bt < -0.5) || (x.side === 'S' && x.bt > 0.5));
   const withBtc = x => x.bt !== null && x.bt !== undefined && ((x.side === 'L' && x.bt > 0.5) || (x.side === 'S' && x.bt < -0.5));
   const rules = {
     'APLIKACJA (test zdany, p>próg, wg przewagi)': { filter: x => passed(x) && x.p > BE + 0.02, sort: byLift, top: 10 },
@@ -180,6 +208,9 @@ async function main() {
     'NOWY TOP + p ≥ 60%': { filter: x => top(x) && x.p >= 0.6, sort: byLift, top: 10 },
     'NOWY TOP + p ≥ 55%': { filter: x => top(x) && x.p >= 0.55, sort: byLift, top: 10 },
     'NOWY TOP, BTC silny trend (|t|>2) – tylko w jego stronę': { filter: x => top(x) && !(x.bt !== null && x.bt !== undefined && ((x.side === 'L' && x.bt < -2) || (x.side === 'S' && x.bt > 2))), sort: byLift, top: 10 },
+    'NOWY TOP z trendem coina': { filter: x => top(x) && x.ct !== null && ((x.side === 'L' && x.ct > 0) || (x.side === 'S' && x.ct < 0)), sort: byLift, top: 10 },
+    'NOWY TOP z trendem coina i BTC': { filter: x => top(x) && x.ct !== null && withBtcOrFlat(x) && ((x.side === 'L' && x.ct > 0) || (x.side === 'S' && x.ct < 0)), sort: byLift, top: 10 },
+    'NOWY TOP zgodnie z nastrojem rynku': { filter: x => top(x) && x.br !== null && ((x.side === 'L' && x.br > 0) || (x.side === 'S' && x.br < 0)), sort: byLift, top: 10 },
     'NOWY TOP tylko zgodnie z BTC': { filter: x => top(x) && withBtc(x), sort: byLift, top: 10 },
     'APLIKACJA bez pod prąd BTC': { filter: x => passed(x) && x.p > BE + 0.02 && !against(x), sort: byLift, top: 10 },
     'przewaga ≥6 pkt': { filter: x => passed(x) && x.p > BE + 0.02 && x.lift >= 0.06, sort: byLift, top: 10 },
