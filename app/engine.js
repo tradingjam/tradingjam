@@ -368,8 +368,31 @@ function compact(a) {
 
 // Scenariusz dla trybu: 'safe' (cel 1 ATR / stop 2 ATR) lub 'equal' (±2 ATR).
 // side: 'long' | 'short' wymusza kierunek; bez niego wybierany jest mocniejszy.
+// Zysk w R przy trafionym celu i oczekiwany wynik scenariusza (p × wygrana − (1−p) × strata)
+const RW_OF = { big: 2, equal: 1, safe: 0.5 };
+const evOf = d => (d && d.p !== null ? d.p * (RW_OF[d.mode] + 1) - 1 : -1);
+const passesTop = d => !d.weak && d.p > (MODE_BE[d.mode] || 0.5) + 0.02 && (d.skill || 0) >= 0.01 && liftOf(d) >= 0.05;
+// Tryb auto: model sam wybiera układ (2:1, 1:1, 1:2) z najwyższym oczekiwanym wynikiem –
+// najpierw spośród układów, które zdały test, potem spośród pozostałych sprawdzonych
+function autoOf(a, side) {
+  const c = ['big', 'equal', 'safe'].map(m => dirOf(a, m, side)).filter(d => d && d.p !== null && !d.tooWide);
+  if (!c.length) return dirOf(a, 'big', side);
+  const good = c.filter(passesTop), ok = c.filter(d => !d.weak);
+  const pool = good.length ? good : ok.length ? ok : c;
+  const best = pool.reduce((x, y) => (evOf(y) > evOf(x) ? y : x));
+  return { ...best, auto: true, ev: evOf(best) };
+}
 function dirOf(a, mode = 'equal', side = null) {
   if (!a || a.error) return null;
+  if (mode === 'auto') {
+    if (side) return autoOf(a, side);
+    const L = autoOf(a, 'long'), S = autoOf(a, 'short');
+    if (!L || !S) return L || S;
+    const gl = passesTop(L), gs = passesTop(S);
+    if (gl !== gs) return gl ? L : S;
+    if (L.weak !== S.weak) return L.weak ? S : L;
+    return evOf(L) >= evOf(S) ? L : S;
+  }
   const mk = (dir, p, hist, target, stop, weak, skill, hiHit, hiN, nVal, md) => ({
     dir, p, hist, target, stop, weak, skill, hiHit, hiN, nVal, mode: md,
     movePct: (target / a.price - 1) * 100, stopPct: (stop / a.price - 1) * 100,
@@ -427,7 +450,8 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   // Kolejność: 0 = wiarygodny i powyżej progu, 1 = wiarygodny pod progiem, 2 = z ostrzeżeniem.
   // W grupie: największa przewaga nad normą („teraz − normalnie”), potem wyższy procent.
   for (const r of rows) { r.tier = rankTier(r); r.lift = liftOf(r.d); }
-  rows.sort((x, y) => (x.tier - y.tier) || (y.lift - x.lift) || (y.d.p - x.d.p));
+  // tryb auto: w grupie wg oczekiwanego wyniku (w backteście lepiej niż wg przewagi na 14 dni)
+  rows.sort((x, y) => (x.tier - y.tier) || (mode === 'auto' ? evOf(y.d) - evOf(x.d) : 0) || (y.lift - x.lift) || (y.d.p - x.d.p));
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
@@ -558,4 +582,4 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };

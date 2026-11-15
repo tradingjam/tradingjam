@@ -119,10 +119,11 @@ const ExBadges = ({ coin }) => {
   return <>{list.map((e, i) => <ExBadge key={e} ex={e} dim={i > 0} />)}</>;
 };
 
-const MODES = [['big', '2:1 · duży zysk'], ['equal', '1:1 · po równo'], ['safe', '1:2 · mały zysk']];
+const MODES = [['big', '2:1 · duży zysk'], ['equal', '1:1 · po równo'], ['safe', '1:2 · mały zysk'], ['auto', 'Auto · model wybiera']];
 const MODE_INFO = {
   big: 'Ryzykujesz 10 $, możesz zarobić 20 $. Cel jest daleko, więc trafia rzadziej (zwykle 30–45%), ale wystarczy wygrać 1 raz na 3, żeby wyjść na zero (próg 33%).',
   equal: 'Ryzykujesz 10 $, możesz zarobić 10 $. Żeby wyjść na plus, trzeba wygrywać częściej niż co drugi raz (próg 50%).',
+  auto: 'Model sam wybiera dla każdego coina układ (2:1, 1:1 albo 1:2), który daje najlepszy oczekiwany wynik. Trafia częściej (w teście ok. 55–60%), ale średni zysk na scenariusz jest mniejszy niż przy stałym 2:1.',
   safe: 'Ryzykujesz 10 $, możesz zarobić tylko 5 $. Cel jest blisko, więc trafia często (zwykle 60–80%), ale trzeba wygrać 2 razy na 3, żeby wyjść na zero (próg 67%).',
 };
 const breakEven = d => E.MODE_BE[d.mode] || 0.5;
@@ -346,6 +347,7 @@ function RiskExample({ d }) {
 }
 
 const GUIDE = [
+  ['Który układ wybrać: 2:1, 1:1, 1:2 czy Auto?', 'Sprawdziliśmy to na historii ok. 120 coinów (TOP 10 w każdej chwili, z prowizjami w wyniku R). 24 godz.: stały 2:1 trafiał 45% razy i dawał średnio +0,32R na scenariusz, Auto trafiał 59%, ale dawał +0,17R. 3 dni: 2:1 – 41% i +0,21R, Auto – 55% i +0,11R. 14 dni (zgodnie z trendem): 2:1 – 39% i +0,16R, Auto – 51% i +0,13R. Wniosek: Auto częściej trafia, bo chętnie wybiera bliski cel (1:2), ale wtedy wygrana jest mała. Najwięcej na jednym scenariuszu zarabiał stały 2:1, dlatego jest domyślny. R = zysk w jednostkach ryzyka: +0,32R przy ryzyku 10 $ to średnio +3,20 $ na scenariusz. Wyniki z przeszłości nie gwarantują przyszłych.'],
   ['Co robi TradingJam?', 'To narzędzie statystyczne i edukacyjne. Co godzinę analizuje wykresy ok. 450 kryptowalut z Binance, BingX i OKX i pokazuje, jak w przeszłości kończyły się podobne sytuacje na wykresie – czyli jak często cena szła w górę (LONG) albo w dół (SHORT). Te same wyniki widzi każdy użytkownik; nie są dopasowane do niczyjej sytuacji.'],
   ['LONG i SHORT', 'LONG = zarabiasz, gdy cena rośnie. SHORT = zarabiasz, gdy cena spada (dostępne na kontraktach, np. na BingX czy Binance Futures).'],
   ['Co znaczy „LONG 45%”?', 'Że w podobnych sytuacjach w przeszłości cena w 45 przypadkach na 100 najpierw doszła do celu, a dopiero potem (albo wcale) do stopu. To nie jest gwarancja. Czy 45% to dużo, zależy od rodzaju celu: przy układzie 2:1 to wynik powyżej progu opłacalności (33%), przy 1:1 – poniżej (50%).'],
@@ -435,7 +437,7 @@ function TopRow({ rank, row, horizonTxt, onPress }) {
         </View>
       </View>
       <View style={{ marginTop: 8 }}><Sparkline data={coin.spark} h={24} /></View>
-      {d.tooWide ? null : <Text style={[s.meta, { marginTop: 8 }]}>Cel {sgn(d.movePct)} ({fmtPrice(d.target)}) · Stop {sgn(d.stopPct)} · w {horizonTxt}</Text>}
+      {d.tooWide ? null : <Text style={[s.meta, { marginTop: 8 }]}>{d.auto ? <Text style={{ color: C.accent, fontWeight: '700' }}>Układ {E.MODE_RR[d.mode]} · </Text> : null}Cel {sgn(d.movePct)} ({fmtPrice(d.target)}) · Stop {sgn(d.stopPct)} · w {horizonTxt}</Text>}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
         <Text style={s.meta}>normalnie {pct0(d.hist)}{d.hiHit !== null && d.hiN >= 20 ? ` · trafność ${pct0(d.hiHit)}` : ''}</Text>
         {d.weak
@@ -531,8 +533,11 @@ const errText = e => (/^Za młody/.test(e) ? e : /[\u4e00-\u9fff]|limit|frequen|
   : e);
 function Detail({ coin, iv0, mode0, onBack }) {
   const [iv, setIv] = useState(iv0);
-  const [mode, setMode] = useState(mode0);
+  const [mode0b, setMode] = useState(mode0);
   const a = coin.res[iv];
+  // Auto: pokazujemy szczegóły w układzie, który wybrał model
+  const autoD = mode0b === 'auto' && a && !a.error ? E.dirOf(a, 'auto') : null;
+  const mode = autoD ? autoD.mode : mode0b === 'auto' ? 'big' : mode0b;
   const ok = a && !a.error && (mode === 'equal' || a[mode]);
   return (
     <ScrollView contentContainerStyle={s.page}>
@@ -556,8 +561,9 @@ function Detail({ coin, iv0, mode0, onBack }) {
       <Chips items={HORIZONS} value={iv} onChange={setIv} />
       <Text style={s.small}>{HORIZON_INFO[iv]}</Text>
       <Text style={s.label}>Ile możesz zarobić, a ile stracić</Text>
-      <Chips items={MODES} value={mode} onChange={setMode} />
-      <Text style={s.small}>{MODE_INFO[mode]}</Text>
+      <Chips items={MODES} value={mode0b} onChange={setMode} />
+      <Text style={s.small}>{MODE_INFO[mode0b]}</Text>
+      {autoD ? <Text style={[s.small, { color: C.accent, fontWeight: '700' }]}>Model wybrał układ {E.MODE_RR[autoD.mode]} – przy tej szansie daje najlepszy oczekiwany wynik ({autoD.ev >= 0 ? '+' : ''}{autoD.ev.toFixed(2)}R na scenariusz).</Text> : null}
 
       {!ok ? <Text style={[s.small, { marginTop: 12 }]}>{a && a.error ? errText(a.error) : 'Brak danych dla tego trybu – poczekaj na kolejny skan.'}</Text> : (
         <View>
