@@ -1006,8 +1006,11 @@ export default function App() {
                 <Text style={[s.li, { marginTop: 4 }]}>Sprawdziliśmy ten horyzont na historii ok. 70 coinów (kilka wersji modelu i zasad): scenariusze wypadały mniej więcej na zero. Dlatego tu nie ma zielonych scenariuszy – lista pokazuje statystykę jako ciekawostkę, a nie wskazówkę. Wiarygodniejsze są horyzonty 24 godz. i 3 dni.</Text>
               </View>
             ) : null}
+            {iv === '30d' ? (
+              <Text style={[s.small, { marginBottom: 6 }]}>30 dni: przewaga potwierdzona dopiero po dodaniu wskaźników długiego trendu (średnia z 200 dni, zakres 3 miesięcy, siła względem BTC). W teście na historii 120 coinów: ok. 38% trafień przy progu 33%, średnio +0,13R. To najsłabszy i najmniej pewny horyzont – sprawdzamy go co tydzień na żywych wynikach.</Text>
+            ) : null}
             {iv === '1d' ? (
-              <Text style={[s.small, { marginBottom: 6 }]}>14 dni: na zielono tylko scenariusze zgodne z trendem coina (LONG, gdy cena jest nad swoją średnią; SHORT, gdy pod nią). W teście na historii ok. 70 coinów taka zasada dawała ok. 39% trafień przy progu 33%. Przewaga jest mniejsza niż przy 24 godz. i 3 dniach.</Text>
+              <Text style={[s.small, { marginBottom: 6 }]}>14 dni: na zielono tylko scenariusze zgodne z trendem coina (LONG, gdy cena jest nad swoją średnią; SHORT, gdy pod nią). Model korzysta też z dodatkowych wskaźników długiego trendu (średnia z 200 dni, zakres 3 miesięcy, siła względem BTC). W teście na historii 120 coinów: ok. 42% trafień przy progu 33%, średnio +0,23R na scenariusz.</Text>
             ) : null}
             <Text style={[s.small, { marginBottom: 6 }]}>Kolejność: najpierw scenariusze, które wyraźnie przeszły test na historii, są powyżej progu i mają przewagę ≥ +5 pkt – od największej przewagi nad normą (jak bardzo obecny wykres zwiększa szansę w porównaniu ze zwykłym zachowaniem coina). Coiny z ostrzeżeniami są na końcu.</Text>
             {top.length === 0 && !status ? <Text style={s.small}>{coins.length ? 'Dane dla tego rodzaju celu pojawią się po najbliższym skanie (co godzinę).' : 'Brak wyników.'}</Text> : null}

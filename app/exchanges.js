@@ -245,7 +245,7 @@ const getKlines = (ex, sym, iv, total) => (ex === 'bingx' ? bingxKlines(sym, iv,
 
 // Pełna analiza jednego coina na wszystkich interwałach (używa silnika E)
 async function analyzeCoin(E, ticker, onProgress, opts = {}) {
-  const res = {}; let spark = []; let k1h = null; let k4h = null; let err4h = null; let ageDays = null; let k1d = null; let err1d = null;
+  const res = {}; let spark = []; let k1h = null; let k4h = null; let err4h = null; let ageDays = null; let k1d = null; let err1d = null; let ext1d = null;
   const NEED_DAYS = { '1h': 9, '4h': 16, '1d': 50, '30d': 80 }; // ile dni historii potrzeba na dany horyzont
   const HZ = { '1h': '24 godz.', '4h': '3 dni', '1d': '14 dni', '30d': '30 dni' };
   // Kontekst rynku i wyższy interwał (tylko w skanerze): BTC dla 24 godz. i 3 dni, świece 4h w modelu 24 godz.
@@ -256,7 +256,10 @@ async function analyzeCoin(E, ticker, onProgress, opts = {}) {
     if (iv === '30d') {
       // 30 dni: te same świece dzienne co 14 dni; młody coin → świece 4h
       try {
-        if (k1d && k1d.c.length >= E.MIN_DAILY) res[iv] = E.compact(E.analyze(k1d, '30d'));
+        if (k1d && k1d.c.length >= E.MIN_DAILY) {
+          res[iv] = ext1d && ext1d.t.length > 300 ? E.compact(E.analyze(k1d, '30d', ext1d)) : { error: 'x' };
+          if (res[iv].error) res[iv] = E.compact(E.analyze(k1d, '30d'));
+        }
         else if (k4h && k4h.c.length >= 300 + 180) res[iv] = E.compact(E.analyze(k4h, '30d4h'));
         else if (err1d || err4h) res[iv] = { error: err1d || err4h };
         else res[iv] = tooYoung(iv);
@@ -287,7 +290,10 @@ async function analyzeCoin(E, ticker, onProgress, opts = {}) {
         res[iv] = E.compact(E.analyze(k, iv, ctx['1h'], mtf));
         if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv)); // awaryjnie bez dodatkowych cech
       } else if (ctx && iv === '1d' && ctx['1d'] && k.c.length >= E.MIN_DAILY) {
-        res[iv] = E.compact(E.analyze(k, iv, ctx['1d']));
+        // 14 dni: trend BTC + dodatkowe wskaźniki długiego trendu (te same użyje 30 dni)
+        try { if (ctx['1dK']) ext1d = E.extCtx(k, ctx['1dK'], ctx['1d']); } catch (e) { ext1d = null; }
+        res[iv] = E.compact(E.analyze(k, iv, ext1d && ext1d.t.length > 300 ? ext1d : ctx['1d']));
+        if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv, ctx['1d']));
         if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv));
       } else if (ctx && iv === '4h') {
         res[iv] = E.compact(E.analyze(k, iv, ctx['4h']));

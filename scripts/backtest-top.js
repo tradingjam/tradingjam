@@ -46,28 +46,7 @@ function walk(Z, Y, lab, H, l2, btcAt) {
   }
   return out;
 }
-// Dodatkowe wskaźniki dla świec dziennych: kontekst BTC + odległość od EMA200, położenie w zakresie 90 dni,
-// siła względem BTC z 30 dni, zmienność teraz vs zwykle (ATR14 / ATR100)
-function extCtx(k, btcK, btcCtx) {
-  const bc = new Map(); btcK.t.forEach((t, i) => bc.set(t, btcK.c[i]));
-  const n = k.c.length, tr = new Array(n).fill(0); let e = k.c[0]; const a = 2 / 201;
-  const out = { t: [], v: [] }; let jb = 0, s14 = 0, s100 = 0;
-  for (let i = 0; i < n; i++) {
-    tr[i] = i ? Math.max(k.h[i] - k.l[i], Math.abs(k.h[i] - k.c[i - 1]), Math.abs(k.l[i] - k.c[i - 1])) : k.h[i] - k.l[i];
-    s14 += tr[i] - (i >= 14 ? tr[i - 14] : 0); s100 += tr[i] - (i >= 100 ? tr[i - 100] : 0);
-    e = i ? a * k.c[i] + (1 - a) * e : e;
-    if (i < 200) continue;
-    while (jb + 1 < btcCtx.t.length && btcCtx.t[jb + 1] <= k.t[i]) jb++;
-    if (btcCtx.t[jb] > k.t[i]) continue;
-    const b0 = bc.get(k.t[i]), b30 = bc.get(k.t[i - 30]); if (!b0 || !b30) continue;
-    let hi = -Infinity, lo = Infinity; for (let j = i - 89; j <= i; j++) { if (k.h[j] > hi) hi = k.h[j]; if (k.l[j] < lo) lo = k.l[j]; }
-    const pos = hi > lo ? (k.c[i] - lo) / (hi - lo) - 0.5 : 0;
-    const rs = Math.log(k.c[i] / k.c[i - 30]) - Math.log(b0 / b30);
-    const vr = s100 > 0 ? (s14 / 14) / (s100 / 100) - 1 : 0;
-    out.t.push(k.t[i]); out.v.push([...btcCtx.v[jb], Math.max(-1, Math.min(3, k.c[i] / e - 1)), pos, Math.max(-2, Math.min(2, rs)), Math.max(-1, Math.min(3, vr))]);
-  }
-  return out;
-}
+const extCtx = E.extCtx;
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina

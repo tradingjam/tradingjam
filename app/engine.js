@@ -338,7 +338,34 @@ const FACTORS = [
   ['Pozycja w zakresie', 'czy cena jest przy szczycie czy przy dołku z ostatnich 20 świec'],
   ['Trend Bitcoina (24 godz., 3 dni i 14 dni)', 'czy cały rynek, czyli BTC, rośnie czy spada'],
   ['Trend z wyższego interwału (24 godz.)', 'trend, RSI i nachylenie średniej ze świec 4h'],
+  ['Długi trend i siła coina (14 i 30 dni)', 'odległość od średniej z 200 dni, położenie w zakresie 3 miesięcy, siła coina względem BTC z 30 dni i czy zmienność jest wyższa niż zwykle'],
 ];
+
+// Dodatkowe wskaźniki dla 14 i 30 dni (świece dzienne): trend BTC + odległość od EMA200, położenie w zakresie
+// 90 dni, siła coina względem BTC z 30 dni, zmienność teraz vs zwykle (ATR14 / ATR100).
+// W backteście (120 coinów) podniosły wynik TOP 10 na 14 dni z +0,10R do +0,19R.
+function extCtx(k, btcK, btcCtx) {
+  const n = k.c.length, tr = new Array(n).fill(0); let e = k.c[0]; const a = 2 / 201;
+  const out = { t: [], v: [] }; let jb = 0, jc = 0, s14 = 0, s100 = 0;
+  const btcAt = tt => { while (jc + 1 < btcK.t.length && btcK.t[jc + 1] <= tt) jc++; return btcK.t[jc] <= tt ? btcK.c[jc] : null; };
+  const b30 = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    tr[i] = i ? Math.max(k.h[i] - k.l[i], Math.abs(k.h[i] - k.c[i - 1]), Math.abs(k.l[i] - k.c[i - 1])) : k.h[i] - k.l[i];
+    s14 += tr[i] - (i >= 14 ? tr[i - 14] : 0); s100 += tr[i] - (i >= 100 ? tr[i - 100] : 0);
+    e = i ? a * k.c[i] + (1 - a) * e : e;
+    b30[i] = btcAt(k.t[i]);
+    if (i < 200) continue;
+    while (jb + 1 < btcCtx.t.length && btcCtx.t[jb + 1] <= k.t[i]) jb++;
+    if (btcCtx.t[jb] > k.t[i]) continue;
+    const b0 = b30[i], bp = b30[i - 30]; if (!b0 || !bp) continue;
+    let hi = -Infinity, lo = Infinity; for (let j = i - 89; j <= i; j++) { if (k.h[j] > hi) hi = k.h[j]; if (k.l[j] < lo) lo = k.l[j]; }
+    const pos = hi > lo ? (k.c[i] - lo) / (hi - lo) - 0.5 : 0;
+    const rs = Math.log(k.c[i] / k.c[i - 30]) - Math.log(b0 / bp);
+    const vr = s100 > 0 ? (s14 / 14) / (s100 / 100) - 1 : 0;
+    out.t.push(k.t[i]); out.v.push([...btcCtx.v[jb], Math.max(-1, Math.min(3, k.c[i] / e - 1)), pos, Math.max(-2, Math.min(2, rs)), Math.max(-1, Math.min(3, vr))]);
+  }
+  return out;
+}
 
 // ---------- Wynik w zwartej postaci (do JSON i do UI) ----------
 const r4 = x => (x === null || x === undefined || !isFinite(x) ? null : Math.round(x * 1e4) / 1e4);
@@ -455,7 +482,7 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
-const UNPROVEN_IV = new Set(['30d']);
+const UNPROVEN_IV = new Set();
 // 14 dni: w backteście przewagę dawały tylko scenariusze zgodne z trendem coina (cena po tej samej stronie EMA50)
 const withCoinTrend = r => r.a && r.a.raw && ((r.d.dir === 'LONG' && r.a.raw.trend > 0) || (r.d.dir === 'SHORT' && r.a.raw.trend < 0));
 const liftOf = d => (d && d.p !== null && d.hist !== null && d.hist !== undefined ? d.p - d.hist : 0);
@@ -582,4 +609,4 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
