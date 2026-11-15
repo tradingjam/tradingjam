@@ -725,49 +725,68 @@ function Results() {
 // ---------- Mój bot (na sucho) – ukryty ekran pod adresem …/#bot ----------
 const BOT_URL = RESULTS_URL.replace('results.json', 'bot.json');
 function BotScreen({ onBack }) {
-  const [b, setB] = useState(null); const [err, setErr] = useState(null);
+  const [data, setB] = useState(null); const [err, setErr] = useState(null); const [sel, setSel] = useState('A');
   useEffect(() => {
     fetch(BOT_URL + '?t=' + Date.now()).then(r => (r.ok ? r.json() : null)).then(j => (j ? setB(j) : setErr('Bot jeszcze nie ma danych – pojawią się po najbliższym skanie.'))).catch(() => setErr('Nie udało się pobrać danych bota.'));
   }, []);
   const back = <TouchableOpacity onPress={onBack}><Text style={{ color: C.accent, fontSize: 16 }}>‹ Wróć do aplikacji</Text></TouchableOpacity>;
   if (err) return <ScrollView contentContainerStyle={s.page}>{back}<Text style={[s.small, { marginTop: 12 }]}>{err}</Text></ScrollView>;
-  if (!b) return <View style={{ marginTop: 40 }}><ActivityIndicator color={C.accent} /></View>;
-  const cfg = b.cfg || {}; const last = b.equity.length ? b.equity[b.equity.length - 1] : [0, b.balance, b.balance];
-  const eq = last[2]; const chg = (eq / cfg.startBalance - 1) * 100;
+  if (!data) return <View style={{ marginTop: 40 }}><ActivityIndicator color={C.accent} /></View>;
+  const accounts = data.accounts || { A: { name: 'Duży zysk 2:1', ...data } };
+  const cfg = data.cfg || {};
+  const eqOf = a => (a.equity.length ? a.equity[a.equity.length - 1][2] : a.balance);
+  const start = cfg.startBalance || 1000;
+  const b = accounts[sel] || Object.values(accounts)[0];
+  const eq = eqOf(b), chg = (eq / start - 1) * 100;
   const wins = b.closed.filter(c => c.net > 0).length, n = b.closed.length;
-  const sumNet = b.closed.reduce((a, c) => a + c.net, 0), fees = b.closed.reduce((a, c) => a + (c.fees || 0), 0);
+  const sumNet = b.closed.reduce((x, c) => x + c.net, 0), fees = b.closed.reduce((x, c) => x + (c.fees || 0), 0);
   const days = Math.max(1, (Date.now() - b.startedAt) / 864e5);
+  let peak = -Infinity, dd = 0; for (const e of b.equity) { peak = Math.max(peak, e[2]); dd = Math.max(dd, (peak - e[2]) / peak); }
   return (
     <ScrollView contentContainerStyle={s.page}>
       {back}
       <Text style={[s.title, { marginTop: 10 }]}>🤖 Mój bot</Text>
-      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – wirtualne konto, prawdziwe ceny BingX, z opłatami i poślizgiem. Od {fmtDate(b.startedAt)} ({days.toFixed(0)} dni) · aktualizacja {fmtDate(b.updatedAt)}</Text>
+      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – trzy wirtualne konta po {start} USDT, prawdziwe ceny BingX, z opłatami i poślizgiem. Aktualizacja {fmtDate(data.updatedAt || b.updatedAt)}.</Text>
+      {Object.entries(accounts).map(([k, a]) => {
+        const e = eqOf(a), c = (e / start - 1) * 100;
+        return (
+          <TouchableOpacity key={k} onPress={() => setSel(k)} style={[s.card, { borderColor: sel === k ? C.accent : C.line, flexDirection: 'row', alignItems: 'center' }]}>
+            <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
+              <Text style={{ color: C.text, fontWeight: '800' }}>{k} · {a.name}</Text>
+              <Text style={s.small}>{a.closed.length} transakcji · otwarte {a.positions.length}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={{ color: C.text, fontWeight: '900', fontSize: 17 }}>{e.toFixed(0)} $</Text>
+              <Text style={{ color: c >= 0 ? C.up : C.down, fontWeight: '800' }}>{c >= 0 ? '+' : ''}{c.toFixed(2)}%</Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
       <View style={s.card}>
-        <Text style={s.meta}>Saldo konta (z otwartymi pozycjami)</Text>
-        <Text style={{ color: C.text, fontSize: 30, fontWeight: '900' }}>{eq.toFixed(2)} USDT</Text>
-        <Text style={{ color: chg >= 0 ? C.up : C.down, fontWeight: '800' }}>{chg >= 0 ? '+' : ''}{chg.toFixed(2)}% od startu ({cfg.startBalance} USDT)</Text>
+        <Text style={{ color: C.text, fontWeight: '800' }}>{sel} · {b.name}</Text>
+        {b.desc ? <Text style={s.small}>{b.desc}</Text> : null}
+        <Text style={{ color: C.text, fontSize: 28, fontWeight: '900', marginTop: 6 }}>{eq.toFixed(2)} USDT</Text>
+        <Text style={{ color: chg >= 0 ? C.up : C.down, fontWeight: '800' }}>{chg >= 0 ? '+' : ''}{chg.toFixed(2)}% od startu · {days.toFixed(0)} dni · największy spadek {(dd * 100).toFixed(1)}%</Text>
         <View style={{ marginTop: 10 }}><Sparkline data={b.equity.map(e => e[2])} h={60} /></View>
-      </View>
-      <View style={s.card}>
-        <Text style={s.li}>Zamknięte transakcje: <Text style={{ fontWeight: '800' }}>{n}</Text> · na plus: {wins} ({n ? pct0(wins / n) : '–'})</Text>
-        <Text style={s.li}>Wynik zamkniętych: <Text style={{ color: sumNet >= 0 ? C.up : C.down, fontWeight: '800' }}>{sumNet >= 0 ? '+' : ''}{sumNet.toFixed(2)} USDT</Text> · w tym opłaty i poślizg: −{fees.toFixed(2)} USDT</Text>
-        <Text style={s.small}>Zasady: ryzyko {(cfg.riskPct * 100).toFixed(0)}% salda na pozycję · maks. {cfg.maxOpen} pozycji · dźwignia łącznie maks. {cfg.maxLeverage}× · po stracie {(cfg.dailyLossPct * 100).toFixed(0)}% w ciągu dnia – przerwa do jutra · tylko zielone scenariusze z TOP 10 (24 godz. i 3 dni).</Text>
+        <Text style={[s.li, { marginTop: 8 }]}>Zamknięte: <Text style={{ fontWeight: '800' }}>{n}</Text> · na plus: {wins} ({n ? pct0(wins / n) : '–'})</Text>
+        <Text style={s.li}>Wynik zamkniętych: <Text style={{ color: sumNet >= 0 ? C.up : C.down, fontWeight: '800' }}>{sumNet >= 0 ? '+' : ''}{sumNet.toFixed(2)} USDT</Text> · opłaty i poślizg: −{fees.toFixed(2)} USDT</Text>
+        <Text style={s.small}>Wspólne zasady: ryzyko {((cfg.riskPct || 0.01) * 100).toFixed(0)}% bieżącego salda na pozycję (zyski same się procentują) · maks. {cfg.maxOpen || 5} pozycji · dźwignia łącznie maks. {cfg.maxLeverage || 3}× · po stracie {((cfg.dailyLossPct || 0.03) * 100).toFixed(0)}% w ciągu dnia – przerwa do jutra.</Text>
       </View>
       <Text style={s.h3}>Otwarte pozycje ({b.positions.length})</Text>
       {b.positions.length ? b.positions.map(p => (
         <View key={p.id} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : '3 dni'}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : '3 dni'} · {p.mode === 'equal' ? '1:1' : '2:1'}</Text></Text>
             <Text style={s.small}>wejście {fmtPrice(p.entry)} · cel {fmtPrice(p.target)} · stop {fmtPrice(p.stop)}</Text>
             <Text style={s.small}>od {fmtDate(p.openedAt)} · koniec {fmtDate(p.end)} · ryzyko {p.risk.toFixed(2)} USDT</Text>
           </View>
         </View>
-      )) : <Text style={s.small}>Brak – bot czeka na zielone scenariusze.</Text>}
+      )) : <Text style={s.small}>Brak – bot czeka na odpowiednie scenariusze.</Text>}
       <Text style={s.h3}>Ostatnie zamknięte</Text>
       {b.closed.length ? b.closed.slice(0, 30).map(c => (
         <View key={c.id + c.closedAt} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason} · {c.mode === 'equal' ? '1:1' : '2:1'}</Text></Text>
             <Text style={s.small}>{fmtDate(c.openedAt)} → {fmtDate(c.closedAt)}</Text>
           </View>
           <Text style={{ color: c.net >= 0 ? C.up : C.down, fontWeight: '800' }}>{c.net >= 0 ? '+' : ''}{c.net.toFixed(2)} $</Text>

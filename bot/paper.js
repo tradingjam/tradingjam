@@ -1,23 +1,23 @@
-// Bot „na sucho” (paper trading) – handluje WIRTUALNYM kontem na cenach z BingX.
-// Co godzinę, po skanie: zamyka pozycje, które doszły do celu / stopu / końca czasu,
-// i otwiera nowe z zielonych scenariuszy TOP 10 (24 godz. i 3 dni, układ 2:1).
-// Liczy opłaty i poślizg, żeby wynik był jak najbliższy prawdziwemu handlowi.
+// Bot „na sucho” (paper trading) – trzy WIRTUALNE konta po 1000 USDT, prawdziwe ceny BingX.
+// Co godzinę, po skanie: zamyka pozycje (cel / stop / koniec czasu) i otwiera nowe.
+// Konta różnią się tylko sposobem wyboru scenariuszy – żeby na żywo sprawdzić, co najlepiej mnoży kapitał:
+//   A „Duży zysk 2:1”     – zielone scenariusze TOP 10 w układzie 2:1
+//   B „Częste trafienia 1:1” – zielone scenariusze 1:1, tylko gdy model daje ≥ 55%
+//   C „Złoty środek”      – dla każdego coina bot sam wybiera układ (2:1 albo 1:1) o wyższej oczekiwanej wartości
+// Wszystkie liczą opłaty i poślizg. Ryzyko liczone od bieżącego salda, więc zyski same się „procentują”.
 const fs = require('fs');
 const path = require('path');
 const E = require('../app/engine.js');
 const X = require('../app/exchanges.js');
 
-const CFG = {
-  mode: 'paper',            // na razie tylko „na sucho”
-  startBalance: 1000,       // wirtualne USDT
-  riskPct: 0.01,            // ryzyko na pozycję: 1% salda (strata przy stopie)
-  maxOpen: 5,               // maks. otwartych pozycji naraz
-  maxLeverage: 3,           // łączna wartość pozycji ≤ 3× saldo
-  feePct: 0.0005,           // opłata BingX (taker) za stronę: 0,05%
-  slipPct: 0.0005,          // poślizg za stronę: 0,05%
-  dailyLossPct: 0.03,       // po stracie 3% w ciągu dnia (UTC) – brak nowych wejść do końca dnia
-  horizons: ['1h', '4h'],   // 24 godz. i 3 dni – potwierdzone w backteście
-  minQv: 3e5,               // min. obrót z 24h na BingX
+const BASE = {
+  startBalance: 1000, riskPct: 0.01, maxOpen: 5, maxLeverage: 3,
+  feePct: 0.0005, slipPct: 0.0005, dailyLossPct: 0.03, horizons: ['1h', '4h'], minQv: 3e5,
+};
+const ACCOUNTS = {
+  A: { name: 'Duży zysk 2:1', desc: 'Zielone scenariusze TOP 10 w układzie 2:1 (cel 2× dalej niż stop).' },
+  B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
+  C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższej oczekiwanej wartości.' },
 };
 const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, '..', 'out');
 const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5 };
@@ -32,40 +32,41 @@ async function loadState() {
   } catch (e) { }
   return null;
 }
-const fresh = () => ({ cfg: CFG, startedAt: Date.now(), balance: CFG.startBalance, positions: [], closed: [], equity: [], day: null, log: [] });
+const fresh = now => ({ startedAt: now, balance: BASE.startBalance, positions: [], closed: [], equity: [], day: null, log: [] });
 
-// cena wykonania z poślizgiem (zawsze na naszą niekorzyść)
-const fill = (px, side, opening) => {
-  const worse = (side === 'LONG') === opening ? 1 + CFG.slipPct : 1 - CFG.slipPct;
-  return px * worse;
-};
-const pnl = (p, exitPx) => (p.side === 'LONG' ? exitPx - p.entry : p.entry - exitPx) * p.qty;
+const fill = (px, side, opening) => px * ((side === 'LONG') === opening ? 1 + BASE.slipPct : 1 - BASE.slipPct);
+const pnl = (p, px) => (p.side === 'LONG' ? px - p.entry : p.entry - px) * p.qty;
+const stamp = t => new Date(t).toISOString().slice(0, 16);
 
-function closePos(st, p, exitRaw, reason, t) {
-  const exit = fill(exitRaw, p.side, false);
-  const gross = pnl(p, exit);
-  const fees = (p.entry * p.qty + exit * p.qty) * CFG.feePct;
-  const net = gross - fees;
-  st.balance += net;
-  st.closed.unshift({ ...p, exit, closedAt: t, reason, net: +net.toFixed(4), fees: +fees.toFixed(4), r: +(net / p.risk).toFixed(2) });
-  st.log.unshift(`${new Date(t).toISOString().slice(0, 16)} zamknięto ${p.base} ${p.side} (${reason}) ${net >= 0 ? '+' : ''}${net.toFixed(2)} USDT`);
+// ---------- kandydaci dla każdego konta ----------
+// zwraca [{ coin, iv, side, p, mode, movePct, stopPct, ev, lift }]
+function candidates(key, res) {
+  const out = [];
+  for (const iv of BASE.horizons) {
+    const big = E.rankTop(res.coins, iv, 'all', 15, 'big').filter(r => r.tier === 0);
+    const eq = E.rankTop(res.coins, iv, 'all', 15, 'equal').filter(r => r.tier === 0 && r.d.p >= 0.55);
+    const mk = (r, mode) => ({
+      coin: r.coin, iv, side: r.d.dir, p: r.d.p, mode, lift: r.lift, movePct: Math.abs(r.d.movePct), stopPct: Math.abs(r.d.stopPct),
+      // oczekiwana wartość w R: 2:1 → 2p − (1−p); 1:1 → p − (1−p)
+      ev: mode === 'big' ? 3 * r.d.p - 1 : 2 * r.d.p - 1,
+    });
+    if (key === 'A') big.forEach(r => out.push(mk(r, 'big')));
+    if (key === 'B') eq.forEach(r => out.push(mk(r, 'equal')));
+    if (key === 'C') {
+      const m = new Map();
+      for (const c of [...big.map(r => mk(r, 'big')), ...eq.map(r => mk(r, 'equal'))]) {
+        const k = c.coin.base + iv; if (!m.has(k) || c.ev > m.get(k).ev) m.set(k, c);
+      }
+      for (const c of m.values()) if (c.ev >= 0.1) out.push(c);
+    }
+  }
+  return out.sort((a, b) => (key === 'C' ? b.ev - a.ev : b.lift - a.lift));
 }
 
-async function main() {
-  const now = Date.now();
-  const res = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'results.json'), 'utf8'));
-  let st = await loadState();
-  if (!st || !st.cfg) st = fresh();
-  st.cfg = CFG;
-
-  // aktualne ceny z BingX (bot handluje tylko tam)
-  const tick = await X.bingxTickers();
-  const byBase = new Map(tick.map(t => [E.cleanBase(t.base), t]));
-
-  // ---------- 1. zamykanie pozycji ----------
+async function runAccount(key, st, res, byBase, klinesFor, now) {
+  // 1. zamykanie
   for (const p of [...st.positions]) {
-    let k = null;
-    try { k = await X.bingxKlines(p.sym, '1h', 200); } catch (e) { }
+    const k = await klinesFor(p.sym);
     let done = null;
     if (k) {
       for (let i = 0; i < k.t.length && !done; i++) {
@@ -73,10 +74,10 @@ async function main() {
         if (k.t[i] >= p.end) break;
         const hitS = p.side === 'LONG' ? k.l[i] <= p.stop : k.h[i] >= p.stop;
         const hitT = p.side === 'LONG' ? k.h[i] >= p.target : k.l[i] <= p.target;
-        if (hitS) done = [p.stop, 'stop', k.t[i] + 36e5];      // oba w jednej świecy → liczymy stop (ostrożnie)
+        if (hitS) done = [p.stop, 'stop', k.t[i] + 36e5];
         else if (hitT) done = [p.target, 'cel', k.t[i] + 36e5];
       }
-      if (!done && k.t.length) p.checkedTo = k.t[k.t.length - 1]; // ostatnia (niezamknięta) świeca – sprawdzimy ponownie
+      if (!done && k.t.length) p.checkedTo = k.t[k.t.length - 1];
     }
     const live = byBase.get(E.cleanBase(p.base));
     if (!done && live) {
@@ -84,62 +85,67 @@ async function main() {
       else if (p.side === 'LONG' ? live.price >= p.target : live.price <= p.target) done = [p.target, 'cel', now];
     }
     if (!done && now >= p.end) done = [live ? live.price : p.entry, 'czas minął', now];
-    if (done) { closePos(st, p, done[0], done[1], done[2]); st.positions = st.positions.filter(x => x !== p); }
+    if (done) {
+      const exit = fill(done[0], p.side, false), fees = (p.entry + exit) * p.qty * BASE.feePct, net = pnl(p, exit) - fees;
+      st.balance += net;
+      st.closed.unshift({ ...p, exit, closedAt: done[2], reason: done[1], net: +net.toFixed(4), fees: +fees.toFixed(4), r: +(net / p.risk).toFixed(2) });
+      st.log.unshift(`${stamp(done[2])} zamknięto ${p.base} ${p.side} (${done[1]}) ${net >= 0 ? '+' : ''}${net.toFixed(2)} USDT`);
+      st.positions = st.positions.filter(x => x !== p);
+    }
   }
-
-  // ---------- 2. bezpiecznik dzienny ----------
+  // 2. bezpiecznik dzienny
   const today = new Date(now).toISOString().slice(0, 10);
   if (!st.day || st.day.date !== today) st.day = { date: today, startBalance: st.balance };
-  const dayLoss = (st.day.startBalance - st.balance) / st.day.startBalance;
-  const halted = dayLoss >= CFG.dailyLossPct;
-  if (halted) st.log.unshift(`${new Date(now).toISOString().slice(0, 16)} dzienny limit straty – brak nowych wejść do końca dnia`);
-
-  // ---------- 3. nowe wejścia ----------
+  const halted = (st.day.startBalance - st.balance) / st.day.startBalance >= BASE.dailyLossPct;
+  // 3. wejścia
   let opened = 0;
   if (!halted) {
-    const cands = [];
-    for (const iv of CFG.horizons) {
-      for (const r of E.rankTop(res.coins, iv, 'all', 10, 'big')) {
-        if (r.tier !== 0) continue;
-        const live = byBase.get(E.cleanBase(r.coin.base));
-        if (!live || live.qv < CFG.minQv) continue;
-        cands.push({ r, iv, live });
-      }
-    }
-    cands.sort((a, b) => b.r.lift - a.r.lift);
-    for (const { r, iv, live } of cands) {
-      if (st.positions.length >= CFG.maxOpen) break;
-      if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(r.coin.base))) continue;
-      const side = r.d.dir;
-      const entry = fill(live.price, side, true);
-      // odległości celu i stopu jak w aplikacji (w %), liczone od ceny wejścia
-      const tgtPct = Math.abs(r.d.movePct) / 100, stopPct = Math.abs(r.d.stopPct) / 100;
-      if (!(stopPct > 0.001 && stopPct < 0.5)) continue;
-      const risk = st.balance * CFG.riskPct;
-      let qty = risk / (entry * stopPct);
-      const used = st.positions.reduce((a, p) => a + p.entry * p.qty, 0);
-      const room = st.balance * CFG.maxLeverage - used;
+    for (const c of candidates(key, res)) {
+      if (st.positions.length >= BASE.maxOpen) break;
+      const live = byBase.get(E.cleanBase(c.coin.base));
+      if (!live || live.qv < BASE.minQv) continue;
+      if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) continue;
+      const tgt = c.movePct / 100, stp = c.stopPct / 100;
+      if (!(stp > 0.001 && stp < 0.5)) continue;
+      const entry = fill(live.price, c.side, true);
+      const risk = st.balance * BASE.riskPct;
+      let qty = risk / (entry * stp);
+      const room = st.balance * BASE.maxLeverage - st.positions.reduce((a, p) => a + p.entry * p.qty, 0);
       if (room <= st.balance * 0.05) break;
       if (qty * entry > room) qty = room / entry;
-      const target = side === 'LONG' ? entry * (1 + tgtPct) : entry * (1 - tgtPct);
-      const stop = side === 'LONG' ? entry * (1 - stopPct) : entry * (1 + stopPct);
       st.positions.push({
-        id: `${now}-${live.sym}`, base: r.coin.base, sym: live.sym, side, iv, openedAt: now, end: now + H_MS[iv],
-        entry, qty, target, stop, risk: qty * entry * stopPct, p: +r.d.p.toFixed(3), lift: +r.lift.toFixed(3),
+        id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + H_MS[c.iv],
+        entry, qty, target: c.side === 'LONG' ? entry * (1 + tgt) : entry * (1 - tgt), stop: c.side === 'LONG' ? entry * (1 - stp) : entry * (1 + stp),
+        risk: qty * entry * stp, p: +c.p.toFixed(3), ev: +c.ev.toFixed(2),
       });
-      st.log.unshift(`${new Date(now).toISOString().slice(0, 16)} otwarto ${r.coin.base} ${side} (${iv === '1h' ? '24 godz.' : '3 dni'}) po ${entry.toPrecision(5)}`);
+      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : '3 dni'}, ${c.mode === 'big' ? '2:1' : '1:1'}) po ${entry.toPrecision(5)}`);
       opened++;
     }
-  }
-
-  // ---------- 4. saldo z niezrealizowanym wynikiem ----------
+  } else st.log.unshift(`${stamp(now)} dzienny limit straty – brak nowych wejść do końca dnia`);
+  // 4. saldo
   const unreal = st.positions.reduce((a, p) => { const l = byBase.get(E.cleanBase(p.base)); return a + (l ? pnl(p, l.price) : 0); }, 0);
   st.equity.push([now, +st.balance.toFixed(2), +(st.balance + unreal).toFixed(2)]);
-  st.equity = st.equity.slice(-24 * 90);
-  st.closed = st.closed.slice(0, 1000); st.log = st.log.slice(0, 200);
-  st.updatedAt = now;
-  fs.writeFileSync(path.join(OUT_DIR, 'bot.json'), JSON.stringify(st));
-  console.log(`Bot (na sucho): saldo ${st.balance.toFixed(2)} USDT, otwarte ${st.positions.length}, nowe ${opened}, zamknięte łącznie ${st.closed.length}${halted ? ' · dzienny limit' : ''}`);
+  st.equity = st.equity.slice(-24 * 90); st.closed = st.closed.slice(0, 1000); st.log = st.log.slice(0, 200);
+  return `${key} ${ACCOUNTS[key].name}: saldo ${st.balance.toFixed(2)}, otwarte ${st.positions.length}, nowe ${opened}${halted ? ', limit dzienny' : ''}`;
+}
+
+async function main() {
+  const now = Date.now();
+  const res = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'results.json'), 'utf8'));
+  let prev = await loadState();
+  // przejście ze starego formatu (jedno konto) – staje się kontem A
+  if (prev && !prev.accounts && prev.balance !== undefined) prev = { accounts: { A: prev } };
+  const state = { cfg: BASE, accounts: {} };
+  for (const key of Object.keys(ACCOUNTS)) state.accounts[key] = { ...(prev && prev.accounts && prev.accounts[key] ? prev.accounts[key] : fresh(now)), ...ACCOUNTS[key] };
+
+  const tick = await X.bingxTickers();
+  const byBase = new Map(tick.map(t => [E.cleanBase(t.base), t]));
+  const cache = new Map();
+  const klinesFor = async sym => { if (!cache.has(sym)) { try { cache.set(sym, await X.bingxKlines(sym, '1h', 200)); } catch (e) { cache.set(sym, null); } } return cache.get(sym); };
+
+  for (const key of Object.keys(ACCOUNTS)) console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, byBase, klinesFor, now));
+  state.updatedAt = now;
+  fs.writeFileSync(path.join(OUT_DIR, 'bot.json'), JSON.stringify(state));
 }
 
 main().catch(e => { console.error('Bot:', e.message); process.exit(0); });
