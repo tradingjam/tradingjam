@@ -338,7 +338,7 @@ const FACTORS = [
   ['Pozycja w zakresie', 'czy cena jest przy szczycie czy przy dołku z ostatnich 20 świec'],
   ['Trend Bitcoina (24 godz., 3 dni i 14 dni)', 'czy cały rynek, czyli BTC, rośnie czy spada'],
   ['Trend z wyższego interwału (24 godz.)', 'trend, RSI i nachylenie średniej ze świec 4h'],
-  ['Długi trend i siła coina (14 i 30 dni)', 'odległość od średniej z 200 dni, położenie w zakresie 3 miesięcy, siła coina względem BTC z 30 dni i czy zmienność jest wyższa niż zwykle'],
+  ['Długi trend i siła coina (14 dni)', 'odległość od średniej z 200 dni, położenie w zakresie 3 miesięcy, siła coina względem BTC z 30 dni i czy zmienność jest wyższa niż zwykle'],
 ];
 
 // Dodatkowe wskaźniki dla 14 i 30 dni (świece dzienne): trend BTC + odległość od EMA200, położenie w zakresie
