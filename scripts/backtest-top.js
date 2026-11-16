@@ -56,10 +56,12 @@ function exitsAt(k, i, atr, long, H) {
   if (!(d > 0) || i + H >= n) return null;
   const cost = 0.002 * e / d; // koszty w R
   const fav = j => (long ? k.h[j] - e : e - k.l[j]) / d, adv = j => (long ? e - k.l[j] : k.h[j] - e) / d, at = j => sg * (k.c[j] - e) / d;
+  let xj = 0;
   const run = (mode, maxH) => {
     let stop = -1, half = false, best = 0, banked = 0, size = 1;
     const end = Math.min(n - 1, i + maxH);
     for (let j = i + 1; j <= end; j++) {
+      xj = j;
       if (-adv(j) <= stop) return banked + size * stop;           // stop (także przesunięty)
       const f = fav(j); best = Math.max(best, f);
       if (mode === 0 && f >= 2) return 2;
@@ -72,9 +74,11 @@ function exitsAt(k, i, atr, long, H) {
       if (mode === 3) { if (best >= 2) stop = Math.max(stop, best - 1); }
       if (j === i + H && mode !== 4 && mode !== 3) return banked + size * at(j);
     }
-    return banked + size * at(end);
+    xj = end; return banked + size * at(end);
   };
-  const out = [run(0, H), run(1, H), run(2, H), run(3, 2 * H), run(4, 2 * H)].map(r => +(r - cost).toFixed(4)); out.cost = cost; return out;
+  const raw = [], bars = [];
+  for (const [m, mh] of [[0, H], [1, H], [2, H], [3, 2 * H], [4, 2 * H]]) { raw.push(run(m, mh)); bars.push(xj - i); }
+  const out = raw.map(r => +(r - cost).toFixed(4)); out.cost = cost; out.gross = raw; out.bars = bars; out.sf = d / e; return out;
 }
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
@@ -100,7 +104,7 @@ async function worker() {
       if (EXITS) {
         const f = IV === '1h' ? features(k, btcCtx, k4) : features(k, btcCtx);
         run(PROD, f.Z, f.raw, 0.3, LEVS.big);
-        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; if (r.ex) { r.cost = r.ex.cost; r.ex = [...r.ex]; } }
+        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; if (r.ex) { r.cost = r.ex.cost; r.gross = r.ex.gross; r.bars = r.ex.bars; r.sf = r.ex.sf; r.ex = [...r.ex]; } }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs, pool: null }); continue;
       }
       if (AUTO) {
@@ -296,6 +300,36 @@ async function main() {
         const h1 = R.slice(0, R.length >> 1), h2 = R.slice(R.length >> 1);
         console.log(`${nm.padEnd(48)} netto ${av(R) >= 0 ? '+' : ''}${av(R).toFixed(3)}R | bez kosztów ${av(G) >= 0 ? '+' : ''}${av(G).toFixed(3)}R | na plus ${(R.filter(v => v > 0).length / (R.length || 1) * 100).toFixed(0)}% | połowy ${av(h1).toFixed(2)} / ${av(h2).toFixed(2)}`);
       });
+    }
+    // ---- Symulacja portfela jak w bocie: limit pozycji, łączna dźwignia, koszty rynkowe vs zlecenia z limitem ----
+    {
+      const cand = new Map(); for (const x of picks) { if (!cand.has(x.t)) cand.set(x.t, []); cand.get(x.t).push(x); }
+      const span = (times[times.length - 1] - times[0]) / (30 * 864e5);
+      const sim = (maxN, lev, q, fee) => {
+        let open = [], sumR = 0, n = 0, peak = 0, dd = 0; const closedR = [];
+        for (const t of times) {
+          open = open.filter(o => { if (o.end <= t) { closedR.push([o.end, o.r]); return false; } return true; });
+          for (const x of cand.get(t) || []) {
+            if (open.length >= maxN) break;
+            if (x.sf < 0.013) continue;                                // stop min. 1,3% jak w aplikacji
+            if (open.some(o => o.coin === x.coin)) continue;
+            const need = 0.01 / x.sf, used = open.reduce((a, o) => a + o.notional, 0);
+            const frac = Math.min(1, (lev - used) / need); if (frac < 0.3) continue;
+            const r = frac * (x.gross[q] - fee / x.sf);
+            open.push({ coin: x.coin, end: t + x.bars[q] * STEP, r, notional: need * frac }); n++;
+          }
+        }
+        for (const o of open) closedR.push([o.end, o.r]);
+        closedR.sort((a, b) => a[0] - b[0]);
+        for (const [, r] of closedR) { sumR += r; peak = Math.max(peak, sumR); dd = Math.max(dd, peak - sumR); }
+        return { n, perMonth: sumR / span, nPer: n / span, dd };
+      };
+      console.log(`\n=== Portfel jak w bocie (ryzyko 1%/pozycję, okres ${span.toFixed(1)} mies.) ===`);
+      for (const [q, qn] of [[0, 'zamknięcie na celu'], [3, 'ciągnięcie zysku']]) for (const [fee, fn] of [[0.002, 'zlecenia rynkowe 0,2%'], [0.0011, 'zlecenia z limitem ~0,11%']])
+        for (const [mx, lv] of [[5, 3], [8, 3], [10, 3], [8, 5]]) {
+          const r = sim(mx, lv, q, fee);
+          console.log(`${qn.padEnd(19)} · ${fn.padEnd(26)} · max ${String(mx).padStart(2)} poz., dźwignia ${lv}× → ${r.nPer.toFixed(0).padStart(3)} transakcji/mies. · ${r.perMonth >= 0 ? '+' : ''}${r.perMonth.toFixed(1)}% mies. · najgłębszy spadek ${r.dd.toFixed(1)}%`);
+        }
     }
     if (false) EXIT_NAMES.forEach((nm, q) => {
       const R = picks.map(x => x.ex[q]); const avg = R.reduce((a, b) => a + b, 0) / (R.length || 1);
