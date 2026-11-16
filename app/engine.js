@@ -630,4 +630,12 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { tightStop, MIN_STOP_PCT, withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+// Jak powstaje procent – krótko, do aplikacji i poradnika
+const HOW_P = [
+  'Odczytuje, co teraz pokazują wskaźniki z listy powyżej – wszystkie naraz, nie jeden.',
+  'Sprawdza w historii tego coina, jak często przy podobnym układzie wskaźników cena doszła najpierw do celu, a nie do stopu.',
+  'Nie stosuje sztywnych reguł z podręcznika (np. „RSI 70 = spadek”) – znaczenie każdego wskaźnika ustala historia danego coina.',
+  'Wynik jest sprawdzany na danych, których model nie widział przy nauce – tylko wtedy scenariusz może być zielony.',
+  'Dlatego procent może czasem kłócić się z tym, co widać na wykresie.',
+];
+module.exports = { HOW_P, tightStop, MIN_STOP_PCT, withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };

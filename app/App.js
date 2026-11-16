@@ -186,9 +186,10 @@ function FactorsBox() {
       </TouchableOpacity>
       {open ? (
         <View style={{ marginTop: 6 }}>
-          <Text style={s.li}>Aplikacja nie kieruje się jednym wskaźnikiem. Średnia krocząca to tylko jeden z kilku czynników, które model bierze pod uwagę naraz:</Text>
+          <Text style={[s.li, { fontWeight: '700' }]}>Co bierze pod uwagę:</Text>
           {E.FACTORS.map(([k, t]) => <Text key={k} style={s.li}>• <Text style={{ fontWeight: '700' }}>{k}</Text> – {t}</Text>)}
-          <Text style={[s.li, { marginTop: 4 }]}>Model szuka w historii tego coina momentów, w których te czynniki układały się podobnie jak teraz, i liczy, jak często cena doszła najpierw do celu, a nie do stopu. Sam z siebie nie zakłada, że „cena pod średnią = spadki” – wagę każdego czynnika ustala historia danego coina. Dlatego przy coinie, który w przeszłości prawie tylko rósł, wynik może się kłócić z tym, co widać na wykresie.</Text>
+          <Text style={[s.li, { fontWeight: '700', marginTop: 6 }]}>Jak z tego powstaje procent:</Text>
+          {E.HOW_P.map(t => <Text key={t} style={s.li}>• {t}</Text>)}
         </View>
       ) : null}
     </View>
@@ -348,6 +349,7 @@ function RiskExample({ d }) {
 }
 
 const GUIDE = [
+  ['Na czym opiera się procent szansy?', 'Co bierze pod uwagę:\n' + E.FACTORS.map(([k, t]) => `• ${k} – ${t}`).join('\n') + '\n\nJak z tego powstaje procent:\n' + E.HOW_P.map(t => `• ${t}`).join('\n')],
   ['Dlaczego scenariusz z bliskim stopem nie jest zielony?', 'Przy każdej transakcji płacisz prowizję i tracisz trochę na poślizgu – razem ok. 0,2% za wejście i wyjście. Gdy stop jest np. 0,5% od ceny, same koszty to aż 40% tego, co ryzykujesz. W teście na historii połowa scenariuszy na 24 godz. miała stop bliżej niż 1,3% i po kosztach wychodziła mocno na minus, choć „na papierze” była na plus. Dlatego zielone są tylko scenariusze ze stopem co najmniej 1,3% od ceny.'],
   ['Który układ wybrać: 2:1, 1:1, 1:2 czy Auto?', 'Sprawdziliśmy to na historii ok. 120 coinów (TOP 10 w każdej chwili, z prowizjami w wyniku R). 24 godz.: stały 2:1 trafiał 45% razy i dawał średnio +0,32R na scenariusz, Auto trafiał 59%, ale dawał +0,17R. 3 dni: 2:1 – 41% i +0,21R, Auto – 55% i +0,11R. 14 dni (zgodnie z trendem): 2:1 – 39% i +0,16R, Auto – 51% i +0,13R. Wniosek: Auto częściej trafia, bo chętnie wybiera bliski cel (1:2), ale wtedy wygrana jest mała. Najwięcej na jednym scenariuszu zarabiał stały 2:1, dlatego jest domyślny. R = zysk w jednostkach ryzyka: +0,32R przy ryzyku 10 $ to średnio +3,20 $ na scenariusz. Wyniki z przeszłości nie gwarantują przyszłych.'],
   ['Co robi TradingJam?', 'To narzędzie statystyczne i edukacyjne. Co godzinę analizuje wykresy ok. 450 kryptowalut z Binance, BingX i OKX i pokazuje, jak w przeszłości kończyły się podobne sytuacje na wykresie – czyli jak często cena szła w górę (LONG) albo w dół (SHORT). Te same wyniki widzi każdy użytkownik; nie są dopasowane do niczyjej sytuacji.'],
