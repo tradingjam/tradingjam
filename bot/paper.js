@@ -13,7 +13,7 @@ const E = require('../app/engine.js');
 const X = require('../app/exchanges.js');
 
 const BASE = {
-  startBalance: 1000, riskPct: 0.01, maxOpen: 5, maxLeverage: 3,
+  startBalance: 1000, riskPct: 0.01, maxOpen: 8, maxLeverage: 3, // 8 pozycji: w backteście +1–2% mies. więcej, ten sam spadek
   feePct: 0.0005, slipPct: 0.0005, dailyLossPct: 0.03, horizons: ['1h', '4h'], minQv: 3e5,
 };
 const ACCOUNTS = {
