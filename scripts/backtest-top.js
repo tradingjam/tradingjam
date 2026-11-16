@@ -51,6 +51,7 @@ const extCtx = E.extCtx;
 // Wynik pozycji w R dla różnych sposobów zamykania. Stop 1×ATR, cel 2×ATR. Gdy w jednej świecy padłby i stop,
 // i inny poziom – liczymy stop (ostrożnie). Koszty: prowizja + poślizg 0,1% na stronę.
 const EXIT_NAMES = ['zamknięcie na celu (teraz)', 'stop na wejście po +1R', 'połowa na celu, reszta ciągnięta', 'całość ciągnięta od celu', 'połowa na celu, reszta ciągnięta, max 2× czas'];
+const WIDE = [[1, 2], [1.5, 3], [2, 4], [1.5, 1.5], [2, 2], [2, 3]];
 function exitsAt(k, i, atr, long, H) {
   const e = k.c[i], d = atr, sg = long ? 1 : -1, n = k.c.length;
   if (!(d > 0) || i + H >= n) return null;
@@ -78,7 +79,19 @@ function exitsAt(k, i, atr, long, H) {
   };
   const raw = [], bars = [];
   for (const [m, mh] of [[0, H], [1, H], [2, H], [3, 2 * H], [4, 2 * H]]) { raw.push(run(m, mh)); bars.push(xj - i); }
-  const out = raw.map(r => +(r - cost).toFixed(4)); out.cost = cost; out.gross = raw; out.bars = bars; out.sf = d / e; return out;
+  // inne odległości stopu i celu (w ATR): wynik w R liczony względem tego stopu, koszty też
+  const alt = {};
+  for (const [sl, tp] of WIDE) {
+    let res = null;
+    const end = Math.min(n - 1, i + H);
+    for (let j = i + 1; j <= end; j++) {
+      if (adv(j) >= sl) { res = -1; break; }
+      if (fav(j) >= tp) { res = tp / sl; break; }
+    }
+    if (res === null) res = at(end) / sl;
+    alt[sl + '/' + tp] = +(res - cost / sl).toFixed(4);
+  }
+  const out = raw.map(r => +(r - cost).toFixed(4)); out.cost = cost; out.gross = raw; out.bars = bars; out.sf = d / e; out.alt = alt; return out;
 }
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
@@ -104,7 +117,7 @@ async function worker() {
       if (EXITS) {
         const f = IV === '1h' ? features(k, btcCtx, k4) : features(k, btcCtx);
         run(PROD, f.Z, f.raw, 0.3, LEVS.big);
-        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; if (r.ex) { r.cost = r.ex.cost; r.gross = r.ex.gross; r.bars = r.ex.bars; r.sf = r.ex.sf; r.ex = [...r.ex]; } }
+        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; if (r.ex) { r.cost = r.ex.cost; r.gross = r.ex.gross; r.bars = r.ex.bars; r.sf = r.ex.sf; r.alt = r.ex.alt; r.ex = [...r.ex]; } }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs, pool: null }); continue;
       }
       if (AUTO) {
@@ -289,7 +302,7 @@ async function main() {
     }
     const times = [...byT.keys()].sort((a, b) => a - b); const blocked = new Map(); const picks = [];
     for (const t of times) { const cs = [...byT.get(t).values()].sort((a, b) => b.lift - a.lift); let n = 0;
-      for (const x of cs) { if (n >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); n++; picks.push(x); } }
+      for (const x of cs) { if (n >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); x.rank = n; n++; picks.push(x); } }
     console.log(`\nSposoby zamykania · model ${PROD} · ${picks.length} scenariuszy TOP 10 (2:1, z kosztami 0,1% na stronę)`);
     const costs = picks.map(x => x.cost).sort((a, b) => a - b);
     console.log(`Koszty w R: mediana ${costs[costs.length >> 1].toFixed(3)} · 90% scenariuszy poniżej ${costs[Math.floor(costs.length * 0.9)].toFixed(3)} · max ${costs[costs.length - 1].toFixed(2)}`);
@@ -300,6 +313,22 @@ async function main() {
         const h1 = R.slice(0, R.length >> 1), h2 = R.slice(R.length >> 1);
         console.log(`${nm.padEnd(48)} netto ${av(R) >= 0 ? '+' : ''}${av(R).toFixed(3)}R | bez kosztów ${av(G) >= 0 ? '+' : ''}${av(G).toFixed(3)}R | na plus ${(R.filter(v => v > 0).length / (R.length || 1) * 100).toFixed(0)}% | połowy ${av(h1).toFixed(2)} / ${av(h2).toFixed(2)}`);
       });
+    }
+    // ---- Odległość stopu × ostrzejsza selekcja: trafienia i średni wynik po kosztach ----
+    {
+      const sels = [['TOP 10 (teraz)', x => true], ['TOP 5', x => x.rank < 5], ['TOP 3', x => x.rank < 3], ['przewaga ≥ 8 pkt', x => x.lift >= 0.08], ['przewaga ≥ 10 pkt', x => x.lift >= 0.10], ['skill ≥ 3%', x => x.rskill >= 0.03]];
+      console.log(`\n=== Stop i cel (w ATR) × selekcja · trafienia | średnio R po kosztach | liczba (stop min. 1,3%) ===`);
+      console.log('selekcja'.padEnd(20) + WIDE.map(([a, b]) => `stop ${a}/cel ${b}`.padEnd(26)).join(''));
+      for (const [sn, sf] of sels) {
+        let line = sn.padEnd(20);
+        for (const [sl, tp] of WIDE) {
+          const P = picks.filter(x => sf(x) && x.alt && x.sf * sl >= 0.013);
+          const R = P.map(x => x.alt[sl + '/' + tp]); const w = R.filter(v => v > 0).length;
+          const av = R.reduce((a, b) => a + b, 0) / (R.length || 1);
+          line += `${(w / (R.length || 1) * 100).toFixed(0)}% ${av >= 0 ? '+' : ''}${av.toFixed(2)}R n${R.length}`.padEnd(26);
+        }
+        console.log(line);
+      }
     }
     // ---- Symulacja portfela jak w bocie: limit pozycji, łączna dźwignia, koszty rynkowe vs zlecenia z limitem ----
     {

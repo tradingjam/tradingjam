@@ -805,7 +805,7 @@ function BotScreen({ onBack }) {
         </View>
       )) : <Text style={s.small}>Jeszcze żadna pozycja się nie zamknęła.</Text>}
       <Text style={s.h3}>Dziennik</Text>
-      {(b.log || []).slice(0, 20).map((l, i) => <Text key={i} style={s.small}>{l}</Text>)}
+      {(b.log || []).slice(0, 20).map((l, i) => <Text key={i} style={s.small}>{l.replace(/^(\d{4}-\d\d-\d\dT\d\d:\d\d)/, m => fmtDate(Date.parse(m + ':00Z')))}</Text>)}
     </ScrollView>
   );
 }

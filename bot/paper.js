@@ -78,7 +78,7 @@ async function runAccount(key, st, res, byBase, klinesFor, now) {
         if (k.t[i] >= p.end) break;
         const hitS = p.side === 'LONG' ? k.l[i] <= p.stop : k.h[i] >= p.stop;
         const hitT = p.side === 'LONG' ? k.h[i] >= p.target : k.l[i] <= p.target;
-        if (hitS) done = [p.stop, p.trailing ? 'ciągnięty stop' : 'stop', k.t[i] + 36e5];
+        if (hitS) done = [p.stop, p.trailing ? 'ciągnięty stop' : 'stop', Math.min(k.t[i] + 36e5, now)];
         else if (p.trail) {
           // ciągnięcie zysku: po celu stop idzie 1R za najlepszą ceną
           const L = p.side === 'LONG';
@@ -87,7 +87,7 @@ async function runAccount(key, st, res, byBase, klinesFor, now) {
             const ns = L ? p.best - p.rDist : p.best + p.rDist;
             if (L ? ns > p.stop : ns < p.stop) { p.stop = ns; p.trailing = true; }
           }
-        } else if (hitT) done = [p.target, 'cel', k.t[i] + 36e5];
+        } else if (hitT) done = [p.target, 'cel', Math.min(k.t[i] + 36e5, now)];
       }
       if (!done && k.t.length) p.checkedTo = k.t[k.t.length - 1];
     }
