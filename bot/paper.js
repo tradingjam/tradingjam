@@ -117,6 +117,9 @@ async function runAccount(key, st, res, byBase, klinesFor, now) {
       const live = byBase.get(E.cleanBase(c.coin.base));
       if (!live || live.qv < BASE.minQv) continue;
       if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) continue;
+      // przerwa po zamknięciu: ten sam coin w tym samym kierunku dopiero po upływie horyzontu poprzedniej pozycji
+      // (tak jak w teście na historii – inaczej bot wchodzi ponownie w ten sam scenariusz po każdym stopie)
+      if (st.closed.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base) && p.side === c.side && p.openedAt + H_MS[p.iv] > now)) continue;
       const tgt = c.movePct / 100, stp = c.stopPct / 100;
       if (!(stp > 0.001 && stp < 0.5)) continue;
       const entry = fill(live.price, c.side, true);
