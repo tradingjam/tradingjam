@@ -21,7 +21,8 @@ const DONATE_NETWORK = 'BNB Smart Chain (BEP-20)';
 const DONATE_TOKEN = 'USDT';
 const LOCAL_BINANCE = 12, LOCAL_BINGX = 6; // skan na telefonie, gdy brak serwera
 
-const HORIZONS = [['1h', '24 godz.'], ['4h', '3 dni'], ['1d', '14 dni'], ['30d', '30 dni']];
+// 30 dni usunięte z aplikacji (16.11.2026) – najsłabsza przewaga i bardzo długa weryfikacja; kod zostaje w silniku
+const HORIZONS = [['1h', '24 godz.'], ['4h', '3 dni'], ['1d', '14 dni']];
 const HORIZON_INFO = {
   '1h': 'Prognoza na najbliższe 24 godziny · liczona ze świec 1-godzinnych · krótki trading',
   '4h': 'Prognoza na najbliższe 3 dni · liczona ze świec 4-godzinnych · swing kilkudniowy',

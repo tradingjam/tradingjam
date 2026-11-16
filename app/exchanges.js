@@ -253,6 +253,7 @@ async function analyzeCoin(E, ticker, onProgress, opts = {}) {
   if (ctx) { try { pre4 = await getKlines(ticker.ex, ticker.sym, '4h', E.HISTORY); } catch (e) { } }
   const tooYoung = iv => ({ error: `Za młody coin: ${ticker.base} jest na giełdzie od ok. ${ageDays} dni. Na prognozę na ${HZ[iv]} potrzeba min. ok. ${NEED_DAYS[iv]} dni historii – statystyka pojawi się, gdy coin będzie starszy.`, young: true });
   for (const iv of Object.keys(E.CFG)) {
+    if (iv === '30d' && !opts.with30d) continue; // 30 dni wyłączone w aplikacji
     if (iv === '30d') {
       // 30 dni: te same świece dzienne co 14 dni; młody coin → świece 4h
       try {

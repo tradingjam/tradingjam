@@ -134,7 +134,7 @@ async function main() {
   history = history.map(p => (p.status === 'open' && now > p.end + 3 * 864e5 ? { ...p, status: 'expired', closedAt: p.end, r: 0, noData: true } : p));
   let added = 0;
   const btcCoin = coins.find(c => c.ex === 'binance' && c.base === 'BTC');
-  for (const iv of ['1h', '4h', '1d', '30d']) {
+  for (const iv of ['1h', '4h', '1d']) {
     const btcA = btcCoin && btcCoin.res[iv] && !btcCoin.res[iv].error ? btcCoin.res[iv] : null;
     for (const r of E.rankTop(coins, iv, 'all', 10, 'big')) {
       if (r.tier !== 0) continue; // tylko wiarygodne i powyżej progu
@@ -171,7 +171,7 @@ async function main() {
   if (errors.length) console.log('Ostrzeżenia:\n  ' + errors.slice(0, 10).join('\n  '));
   const catCount = {}; for (const c of coins) catCount[c.cat] = (catCount[c.cat] || 0) + 1;
   console.log('Kategorie:', JSON.stringify(catCount));
-  for (const iv of ['1h', '4h', '1d', '30d']) {
+  for (const iv of ['1h', '4h', '1d']) {
     console.log(`TOP 5 ${iv}: ` + E.rankTop(coins, iv, 'all', 5, 'big').map(r => `${r.coin.base} ${r.d.dir} ${(r.d.p * 100).toFixed(0)}%${r.d.weak ? '(brak przewagi)' : ''}`).join(', '));
   }
   if (!coins.length) process.exit(1); // nie nadpisuj danych pustym wynikiem
