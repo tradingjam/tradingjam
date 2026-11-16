@@ -497,6 +497,10 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
+// 24 godz. i 3 dni: ostrzejszy próg przewagi (+8 pkt). Backtest 16.11.2026 (110 coinów, TOP 10, po kosztach):
+// 24 godz. 44% → 49% trafień, +0,18R → +0,34R; 3 dni 43% → 51%, +0,21R → +0,46R; ok. 3× mniej scenariuszy.
+const TOP_LIFT_IV = { '1h': 0.08, '4h': 0.08 };
+const liftMin = iv => TOP_LIFT_IV[iv] || TOP_LIFT;
 // Stop bliżej niż 1,3% ceny: prowizje i poślizg (ok. 0,2% w obie strony) zjadają zysk.
 // W backteście 24 godz. takie scenariusze wychodziły mocno na minus po kosztach.
 const MIN_STOP_PCT = 1.3;
@@ -512,7 +516,7 @@ function rankTier(r) {
   if (r.iv === '1d' && !withCoinTrend(r)) return 1;
   if (tightStop(r.d)) return 1;
   // TOP: test wyraźnie zdany (skill ≥ 1%) i przewaga nad normą ≥ 5 pkt – w backteście najlepsza zasada wyboru
-  return r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02 && (r.d.skill || 0) >= TOP_SKILL && liftOf(r.d) >= TOP_LIFT ? 0 : 1;
+  return r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02 && (r.d.skill || 0) >= TOP_SKILL && liftOf(r.d) >= liftMin(r.iv) ? 0 : 1;
 }
 // Krótki powód miejsca w TOP 10 (do wyświetlenia przy coinie)
 function rankReason(r) {
@@ -526,7 +530,7 @@ function rankReason(r) {
   if (UNPROVEN_IV.has(r.iv)) return { good: false, text: `${liftTxt} · horyzont bez potwierdzonej przewagi w teście na historii` };
   if (r.iv === '1d' && !withCoinTrend(r)) return { good: false, text: `Niżej na liście: ${liftTxt} · pod prąd trendu coina (na 14 dni liczą się tylko scenariusze zgodne z trendem)` };
   if (tightStop(r.d)) return { good: false, text: `Niżej na liście: ${liftTxt} · stop tylko ${Math.abs(r.d.stopPct).toFixed(1)}% od ceny – prowizje zjadłyby zysk` };
-  const why = !(r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02) ? 'pod progiem opłacalności' : liftOf(r.d) < TOP_LIFT ? 'przewaga poniżej +5 pkt' : 'test zdany tylko na granicy';
+  const why = !(r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02) ? 'pod progiem opłacalności' : liftOf(r.d) < liftMin(r.iv) ? `przewaga poniżej +${Math.round(liftMin(r.iv) * 100)} pkt` : 'test zdany tylko na granicy';
   return { good: false, text: `Niżej na liście: ${liftTxt} · ${why}` };
 }
 
