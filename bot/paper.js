@@ -4,6 +4,8 @@
 //   A „Duży zysk 2:1”     – zielone scenariusze TOP 10 w układzie 2:1
 //   B „Częste trafienia 1:1” – zielone scenariusze 1:1, tylko gdy model daje ≥ 55%
 //   C „Złoty środek”      – dla każdego coina bot sam wybiera układ (2:1 albo 1:1) o wyższej oczekiwanej wartości
+//   D „Ciągnięcie zysku”  – jak A, ale po dojściu do celu nie zamyka, tylko ciągnie stop za ceną (1R za szczytem),
+//                            max 2× czas; pomija scenariusze ze stopem bliżej niż 1,3% (prowizje zjadają tam zysk)
 // Wszystkie liczą opłaty i poślizg. Ryzyko liczone od bieżącego salda, więc zyski same się „procentują”.
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +20,7 @@ const ACCOUNTS = {
   A: { name: 'Duży zysk 2:1', desc: 'Zielone scenariusze TOP 10 w układzie 2:1 (cel 2× dalej niż stop).' },
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższej oczekiwanej wartości.' },
+  D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%, bo tam prowizje zjadają zysk.' },
 };
 const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, '..', 'out');
 const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5 };
@@ -51,6 +54,7 @@ function candidates(key, res) {
       ev: mode === 'big' ? 3 * r.d.p - 1 : 2 * r.d.p - 1,
     });
     if (key === 'A') big.forEach(r => out.push(mk(r, 'big')));
+    if (key === 'D') big.forEach(r => { const c = mk(r, 'big'); if (c.stopPct >= 1.3) out.push(c); });
     if (key === 'B') eq.forEach(r => out.push(mk(r, 'equal')));
     if (key === 'C') {
       const m = new Map();
@@ -74,15 +78,23 @@ async function runAccount(key, st, res, byBase, klinesFor, now) {
         if (k.t[i] >= p.end) break;
         const hitS = p.side === 'LONG' ? k.l[i] <= p.stop : k.h[i] >= p.stop;
         const hitT = p.side === 'LONG' ? k.h[i] >= p.target : k.l[i] <= p.target;
-        if (hitS) done = [p.stop, 'stop', k.t[i] + 36e5];
-        else if (hitT) done = [p.target, 'cel', k.t[i] + 36e5];
+        if (hitS) done = [p.stop, p.trailing ? 'ciągnięty stop' : 'stop', k.t[i] + 36e5];
+        else if (p.trail) {
+          // ciągnięcie zysku: po celu stop idzie 1R za najlepszą ceną
+          const L = p.side === 'LONG';
+          p.best = L ? Math.max(p.best || p.entry, k.h[i]) : Math.min(p.best || p.entry, k.l[i]);
+          if (L ? p.best >= p.target : p.best <= p.target) {
+            const ns = L ? p.best - p.rDist : p.best + p.rDist;
+            if (L ? ns > p.stop : ns < p.stop) { p.stop = ns; p.trailing = true; }
+          }
+        } else if (hitT) done = [p.target, 'cel', k.t[i] + 36e5];
       }
       if (!done && k.t.length) p.checkedTo = k.t[k.t.length - 1];
     }
     const live = byBase.get(E.cleanBase(p.base));
     if (!done && live) {
-      if (p.side === 'LONG' ? live.price <= p.stop : live.price >= p.stop) done = [p.stop, 'stop', now];
-      else if (p.side === 'LONG' ? live.price >= p.target : live.price <= p.target) done = [p.target, 'cel', now];
+      if (p.side === 'LONG' ? live.price <= p.stop : live.price >= p.stop) done = [p.stop, p.trailing ? 'ciągnięty stop' : 'stop', now];
+      else if (!p.trail && (p.side === 'LONG' ? live.price >= p.target : live.price <= p.target)) done = [p.target, 'cel', now];
     }
     if (!done && now >= p.end) done = [live ? live.price : p.entry, 'czas minął', now];
     if (done) {
@@ -114,9 +126,10 @@ async function runAccount(key, st, res, byBase, klinesFor, now) {
       if (room <= st.balance * 0.05) break;
       if (qty * entry > room) qty = room / entry;
       st.positions.push({
-        id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + H_MS[c.iv],
+        id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + H_MS[c.iv] * (key === 'D' ? 2 : 1),
         entry, qty, target: c.side === 'LONG' ? entry * (1 + tgt) : entry * (1 - tgt), stop: c.side === 'LONG' ? entry * (1 - stp) : entry * (1 + stp),
         risk: qty * entry * stp, p: +c.p.toFixed(3), ev: +c.ev.toFixed(2),
+        ...(key === 'D' ? { trail: true, rDist: entry * stp, best: entry } : {}),
       });
       st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : '3 dni'}, ${c.mode === 'big' ? '2:1' : '1:1'}) po ${entry.toPrecision(5)}`);
       opened++;
