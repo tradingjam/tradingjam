@@ -74,7 +74,7 @@ function exitsAt(k, i, atr, long, H) {
     }
     return banked + size * at(end);
   };
-  return [run(0, H), run(1, H), run(2, H), run(3, 2 * H), run(4, 2 * H)].map(r => +(r - cost).toFixed(4));
+  const out = [run(0, H), run(1, H), run(2, H), run(3, 2 * H), run(4, 2 * H)].map(r => +(r - cost).toFixed(4)); out.cost = cost; return out;
 }
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
@@ -100,7 +100,7 @@ async function worker() {
       if (EXITS) {
         const f = IV === '1h' ? features(k, btcCtx, k4) : features(k, btcCtx);
         run(PROD, f.Z, f.raw, 0.3, LEVS.big);
-        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; }
+        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; if (r.ex) { r.cost = r.ex.cost; r.ex = [...r.ex]; } }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs, pool: null }); continue;
       }
       if (AUTO) {
@@ -287,7 +287,17 @@ async function main() {
     for (const t of times) { const cs = [...byT.get(t).values()].sort((a, b) => b.lift - a.lift); let n = 0;
       for (const x of cs) { if (n >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); n++; picks.push(x); } }
     console.log(`\nSposoby zamykania · model ${PROD} · ${picks.length} scenariuszy TOP 10 (2:1, z kosztami 0,1% na stronę)`);
-    EXIT_NAMES.forEach((nm, q) => {
+    const costs = picks.map(x => x.cost).sort((a, b) => a - b);
+    console.log(`Koszty w R: mediana ${costs[costs.length >> 1].toFixed(3)} · 90% scenariuszy poniżej ${costs[Math.floor(costs.length * 0.9)].toFixed(3)} · max ${costs[costs.length - 1].toFixed(2)}`);
+    for (const [lbl, sel] of [['wszystkie', () => true], ['koszt < 0,15R (stop dalej niż ~1,3%)', x => x.cost < 0.15]]) {
+      const P = picks.filter(sel); console.log(`--- ${lbl}: ${P.length} scen. ---`);
+      EXIT_NAMES.forEach((nm, q) => {
+        const R = P.map(x => x.ex[q]), G = P.map(x => x.ex[q] + x.cost); const av = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
+        const h1 = R.slice(0, R.length >> 1), h2 = R.slice(R.length >> 1);
+        console.log(`${nm.padEnd(48)} netto ${av(R) >= 0 ? '+' : ''}${av(R).toFixed(3)}R | bez kosztów ${av(G) >= 0 ? '+' : ''}${av(G).toFixed(3)}R | na plus ${(R.filter(v => v > 0).length / (R.length || 1) * 100).toFixed(0)}% | połowy ${av(h1).toFixed(2)} / ${av(h2).toFixed(2)}`);
+      });
+    }
+    if (false) EXIT_NAMES.forEach((nm, q) => {
       const R = picks.map(x => x.ex[q]); const avg = R.reduce((a, b) => a + b, 0) / (R.length || 1);
       const plus = R.filter(v => v > 0).length / (R.length || 1); const sorted = [...R].sort((a, b) => a - b);
       // połowy okresu – czy wynik jest stabilny w czasie
