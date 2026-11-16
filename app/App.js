@@ -339,6 +339,7 @@ function RiskExample({ d }) {
       <Text style={s.h3}>📚 Przykład edukacyjny: jak działa zarządzanie ryzykiem</Text>
       <Text style={s.li}>Załóżmy przykładowy kapitał <Text style={{ fontWeight: '800' }}>1000 USDT</Text> i zasadę ryzykowania <Text style={{ fontWeight: '800' }}>1%</Text> kapitału na jedną transakcję. Przy odległości stopu {Math.abs(d.stopPct).toFixed(1)}%:</Text>
       <Text style={s.li}>• wielkość pozycji w tym przykładzie: {size.toFixed(0)} USDT</Text>
+      {E.tightStop(d) ? <Text style={[s.li, { color: C.warn }]}>⚠ Stop jest bardzo blisko ({Math.abs(d.stopPct).toFixed(1)}%). Prowizja i poślizg to razem ok. 0,2% za wejście i wyjście, czyli tu ok. {Math.round(0.2 / Math.abs(d.stopPct) * 100)}% ryzyka na każdej transakcji. W teście na historii takie scenariusze po kosztach wychodziły na minus, dlatego nie są zielone.</Text> : null}
       <Text style={s.li}>• strata przy stopie: <Text style={{ color: C.down }}>−{loss.toFixed(2)} USDT</Text> (1% kapitału)</Text>
       <Text style={s.li}>• zysk przy celu: <Text style={{ color: C.up }}>+{gain.toFixed(2)} USDT</Text></Text>
       <Text style={s.small}>To ilustracja zasady liczenia ryzyka, a nie propozycja transakcji ani wielkości pozycji dla Ciebie.</Text>
@@ -347,6 +348,7 @@ function RiskExample({ d }) {
 }
 
 const GUIDE = [
+  ['Dlaczego scenariusz z bliskim stopem nie jest zielony?', 'Przy każdej transakcji płacisz prowizję i tracisz trochę na poślizgu – razem ok. 0,2% za wejście i wyjście. Gdy stop jest np. 0,5% od ceny, same koszty to aż 40% tego, co ryzykujesz. W teście na historii połowa scenariuszy na 24 godz. miała stop bliżej niż 1,3% i po kosztach wychodziła mocno na minus, choć „na papierze” była na plus. Dlatego zielone są tylko scenariusze ze stopem co najmniej 1,3% od ceny.'],
   ['Który układ wybrać: 2:1, 1:1, 1:2 czy Auto?', 'Sprawdziliśmy to na historii ok. 120 coinów (TOP 10 w każdej chwili, z prowizjami w wyniku R). 24 godz.: stały 2:1 trafiał 45% razy i dawał średnio +0,32R na scenariusz, Auto trafiał 59%, ale dawał +0,17R. 3 dni: 2:1 – 41% i +0,21R, Auto – 55% i +0,11R. 14 dni (zgodnie z trendem): 2:1 – 39% i +0,16R, Auto – 51% i +0,13R. Wniosek: Auto częściej trafia, bo chętnie wybiera bliski cel (1:2), ale wtedy wygrana jest mała. Najwięcej na jednym scenariuszu zarabiał stały 2:1, dlatego jest domyślny. R = zysk w jednostkach ryzyka: +0,32R przy ryzyku 10 $ to średnio +3,20 $ na scenariusz. Wyniki z przeszłości nie gwarantują przyszłych.'],
   ['Co robi TradingJam?', 'To narzędzie statystyczne i edukacyjne. Co godzinę analizuje wykresy ok. 450 kryptowalut z Binance, BingX i OKX i pokazuje, jak w przeszłości kończyły się podobne sytuacje na wykresie – czyli jak często cena szła w górę (LONG) albo w dół (SHORT). Te same wyniki widzi każdy użytkownik; nie są dopasowane do niczyjej sytuacji.'],
   ['LONG i SHORT', 'LONG = zarabiasz, gdy cena rośnie. SHORT = zarabiasz, gdy cena spada (dostępne na kontraktach, np. na BingX czy Binance Futures).'],

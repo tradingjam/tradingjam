@@ -497,6 +497,10 @@ function rankTop(coins, iv, dir = 'all', n = 10, mode = 'equal') {
   return rows.slice(0, n);
 }
 const TOP_SKILL = 0.01, TOP_LIFT = 0.05;
+// Stop bliżej niż 1,3% ceny: prowizje i poślizg (ok. 0,2% w obie strony) zjadają zysk.
+// W backteście 24 godz. takie scenariusze wychodziły mocno na minus po kosztach.
+const MIN_STOP_PCT = 1.3;
+const tightStop = d => !!d && d.stopPct !== undefined && Math.abs(d.stopPct) < MIN_STOP_PCT;
 const UNPROVEN_IV = new Set();
 // 14 dni: w backteście przewagę dawały tylko scenariusze zgodne z trendem coina (cena po tej samej stronie EMA50)
 const withCoinTrend = r => r.a && r.a.raw && ((r.d.dir === 'LONG' && r.a.raw.trend > 0) || (r.d.dir === 'SHORT' && r.a.raw.trend < 0));
@@ -506,6 +510,7 @@ function rankTier(r) {
   // 14 i 30 dni: backtest nie potwierdził przewagi – bez zielonych scenariuszy
   if (UNPROVEN_IV.has(r.iv)) return 1;
   if (r.iv === '1d' && !withCoinTrend(r)) return 1;
+  if (tightStop(r.d)) return 1;
   // TOP: test wyraźnie zdany (skill ≥ 1%) i przewaga nad normą ≥ 5 pkt – w backteście najlepsza zasada wyboru
   return r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02 && (r.d.skill || 0) >= TOP_SKILL && liftOf(r.d) >= TOP_LIFT ? 0 : 1;
 }
@@ -520,6 +525,7 @@ function rankReason(r) {
   if (r.tier === 0) return { good: true, text: `Dlaczego tu: ${liftTxt} · powyżej progu · test na historii zdany ✓` };
   if (UNPROVEN_IV.has(r.iv)) return { good: false, text: `${liftTxt} · horyzont bez potwierdzonej przewagi w teście na historii` };
   if (r.iv === '1d' && !withCoinTrend(r)) return { good: false, text: `Niżej na liście: ${liftTxt} · pod prąd trendu coina (na 14 dni liczą się tylko scenariusze zgodne z trendem)` };
+  if (tightStop(r.d)) return { good: false, text: `Niżej na liście: ${liftTxt} · stop tylko ${Math.abs(r.d.stopPct).toFixed(1)}% od ceny – prowizje zjadłyby zysk` };
   const why = !(r.d.p > (MODE_BE[r.d.mode] || 0.5) + 0.02) ? 'pod progiem opłacalności' : liftOf(r.d) < TOP_LIFT ? 'przewaga poniżej +5 pkt' : 'test zdany tylko na granicy';
   return { good: false, text: `Niżej na liście: ${liftTxt} · ${why}` };
 }
@@ -624,4 +630,4 @@ function historyBreakdown(list0, iv) {
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
 const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
 
-module.exports = { withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { tightStop, MIN_STOP_PCT, withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
