@@ -305,7 +305,7 @@ async function main() {
     {
       const cand = new Map(); for (const x of picks) { if (!cand.has(x.t)) cand.set(x.t, []); cand.get(x.t).push(x); }
       const span = (times[times.length - 1] - times[0]) / (30 * 864e5);
-      const sim = (maxN, lev, q, fee) => {
+      const sim = (maxN, lev, q, fee, maxDir = 99) => {
         let open = [], sumR = 0, n = 0, peak = 0, dd = 0; const closedR = [];
         for (const t of times) {
           open = open.filter(o => { if (o.end <= t) { closedR.push([o.end, o.r]); return false; } return true; });
@@ -313,10 +313,11 @@ async function main() {
             if (open.length >= maxN) break;
             if (x.sf < 0.013) continue;                                // stop min. 1,3% jak w aplikacji
             if (open.some(o => o.coin === x.coin)) continue;
+            if (open.filter(o => o.side === x.side).length >= maxDir) continue; // limit pozycji w jednym kierunku
             const need = 0.01 / x.sf, used = open.reduce((a, o) => a + o.notional, 0);
             const frac = Math.min(1, (lev - used) / need); if (frac < 0.3) continue;
             const r = frac * (x.gross[q] - fee / x.sf);
-            open.push({ coin: x.coin, end: t + x.bars[q] * STEP, r, notional: need * frac }); n++;
+            open.push({ coin: x.coin, side: x.side, end: t + x.bars[q] * STEP, r, notional: need * frac }); n++;
           }
         }
         for (const o of open) closedR.push([o.end, o.r]);
@@ -324,6 +325,11 @@ async function main() {
         for (const [, r] of closedR) { sumR += r; peak = Math.max(peak, sumR); dd = Math.max(dd, peak - sumR); }
         return { n, perMonth: sumR / span, nPer: n / span, dd };
       };
+      console.log(`\n=== Limit pozycji w jednym kierunku (maks. 8 pozycji, dźwignia 3×, zlecenia rynkowe) ===`);
+      for (const [q, qn] of [[0, 'zamknięcie na celu'], [3, 'ciągnięcie zysku']]) for (const md of [99, 6, 5, 4]) {
+        const r = sim(8, 3, q, 0.002, md);
+        console.log(`${qn.padEnd(19)} · ${md === 99 ? 'bez limitu' : 'maks. ' + md + ' w 1 stronę'} → ${r.nPer.toFixed(0).padStart(3)} transakcji/mies. · ${r.perMonth >= 0 ? '+' : ''}${r.perMonth.toFixed(1)}% mies. · najgłębszy spadek ${r.dd.toFixed(1)}%`);
+      }
       console.log(`\n=== Portfel jak w bocie (ryzyko 1%/pozycję, okres ${span.toFixed(1)} mies.) ===`);
       for (const [q, qn] of [[0, 'zamknięcie na celu'], [3, 'ciągnięcie zysku']]) for (const [fee, fn] of [[0.002, 'zlecenia rynkowe 0,2%'], [0.0011, 'zlecenia z limitem ~0,11%']])
         for (const [mx, lv] of [[5, 3], [8, 3], [10, 3], [8, 5]]) {
