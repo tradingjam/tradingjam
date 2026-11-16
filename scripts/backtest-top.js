@@ -15,8 +15,9 @@ const MIN_BARS = BARS === '1d' ? 500 : 900;
 const N_BINANCE = +(process.env.N_BINANCE || 70), N_BINGX = +(process.env.N_BINGX || 50);
 const MODE = process.env.MODE || 'big';
 const LEVS = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] };
-const AUTO = MODE === 'auto';            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
-const LEV = LEVS[AUTO ? 'big' : MODE]; // [cel, stop] w ATR
+const AUTO = MODE === 'auto';
+const EXITS = MODE === 'exits';          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
+const LEV = LEVS[AUTO || EXITS ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
 const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
@@ -47,6 +48,34 @@ function walk(Z, Y, lab, H, l2, btcAt) {
   return out;
 }
 const extCtx = E.extCtx;
+// Wynik pozycji w R dla różnych sposobów zamykania. Stop 1×ATR, cel 2×ATR. Gdy w jednej świecy padłby i stop,
+// i inny poziom – liczymy stop (ostrożnie). Koszty: prowizja + poślizg 0,1% na stronę.
+const EXIT_NAMES = ['zamknięcie na celu (teraz)', 'stop na wejście po +1R', 'połowa na celu, reszta ciągnięta', 'całość ciągnięta od celu', 'połowa na celu, reszta ciągnięta, max 2× czas'];
+function exitsAt(k, i, atr, long, H) {
+  const e = k.c[i], d = atr, sg = long ? 1 : -1, n = k.c.length;
+  if (!(d > 0) || i + H >= n) return null;
+  const cost = 0.002 * e / d; // koszty w R
+  const fav = j => (long ? k.h[j] - e : e - k.l[j]) / d, adv = j => (long ? e - k.l[j] : k.h[j] - e) / d, at = j => sg * (k.c[j] - e) / d;
+  const run = (mode, maxH) => {
+    let stop = -1, half = false, best = 0, banked = 0, size = 1;
+    const end = Math.min(n - 1, i + maxH);
+    for (let j = i + 1; j <= end; j++) {
+      if (-adv(j) <= stop) return banked + size * stop;           // stop (także przesunięty)
+      const f = fav(j); best = Math.max(best, f);
+      if (mode === 0 && f >= 2) return 2;
+      if (mode === 1) { if (f >= 2) return 2; if (best >= 1) stop = Math.max(stop, 0); }
+      if (mode === 2 || mode === 4) {
+        if (!half && f >= 2) { half = true; banked = 1; size = 0.5; stop = 1; }
+        if (half) stop = Math.max(stop, best - 1);
+        if (j === i + H && mode === 2) return banked + size * at(j);
+      }
+      if (mode === 3) { if (best >= 2) stop = Math.max(stop, best - 1); }
+      if (j === i + H && mode !== 4 && mode !== 3) return banked + size * at(j);
+    }
+    return banked + size * at(end);
+  };
+  return [run(0, H), run(1, H), run(2, H), run(3, 2 * H), run(4, 2 * H)].map(r => +(r - cost).toFixed(4));
+}
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina
@@ -68,6 +97,12 @@ async function worker() {
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (EXITS) {
+        const f = IV === '1h' ? features(k, btcCtx, k4) : features(k, btcCtx);
+        run(PROD, f.Z, f.raw, 0.3, LEVS.big);
+        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) { const rw = f.raw[r.i]; r.ex = rw ? exitsAt(k, r.i, rw.atr * SCALE, side === 'L', H) : null; }
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs, pool: null }); continue;
+      }
       if (AUTO) {
         const ctxOf = { base: [k], btc: [k, btcCtx], mtfbtc: [k, btcCtx, k4] };
         const names = IV === '30d' ? ['base', 'btc'] : [PROD];
@@ -240,6 +275,27 @@ async function main() {
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
+  if (EXITS) {
+    const cr = coins.filter(c => c.recs[PROD]).map(c => ({ coin: c.coin, L: c.recs[PROD].L.filter(r => r.ex), S: c.recs[PROD].S.filter(r => r.ex) }));
+    const byT = new Map();
+    for (const c of cr) for (const side of ['L', 'S']) for (const r of c[side]) {
+      if (!byT.has(r.t)) byT.set(r.t, new Map()); const m = byT.get(r.t); const prev = m.get(c.coin);
+      const cand = { coin: c.coin, side, ...r, lift: r.p - r.prior };
+      if (cand.rskill !== null && cand.rskill >= 0.01 && cand.p > BE + 0.02 && cand.lift >= 0.05 && (!prev || cand.lift > prev.lift)) m.set(c.coin, cand);
+    }
+    const times = [...byT.keys()].sort((a, b) => a - b); const blocked = new Map(); const picks = [];
+    for (const t of times) { const cs = [...byT.get(t).values()].sort((a, b) => b.lift - a.lift); let n = 0;
+      for (const x of cs) { if (n >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); n++; picks.push(x); } }
+    console.log(`\nSposoby zamykania · model ${PROD} · ${picks.length} scenariuszy TOP 10 (2:1, z kosztami 0,1% na stronę)`);
+    EXIT_NAMES.forEach((nm, q) => {
+      const R = picks.map(x => x.ex[q]); const avg = R.reduce((a, b) => a + b, 0) / (R.length || 1);
+      const plus = R.filter(v => v > 0).length / (R.length || 1); const sorted = [...R].sort((a, b) => a - b);
+      // połowy okresu – czy wynik jest stabilny w czasie
+      const h1 = R.slice(0, R.length >> 1), h2 = R.slice(R.length >> 1); const av = a => a.reduce((x, y) => x + y, 0) / (a.length || 1);
+      console.log(`${nm.padEnd(48)} średnio ${avg >= 0 ? '+' : ''}${avg.toFixed(3)}R | na plus ${(plus * 100).toFixed(0)}% | najlepsza +${sorted[sorted.length - 1].toFixed(1)}R | 1. połowa ${av(h1).toFixed(3)} · 2. połowa ${av(h2).toFixed(3)}`);
+    });
+    console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
+  }
   const variants = {};
   for (const name of ['base', 'btc', 'btcext', 'mtf', 'mtfbtc', 'mtfbtcext', 'breadth', 'btcbreadth']) {
     const cr = coins.filter(c => c.recs[name]).map(c => ({ coin: c.coin, L: c.recs[name].L, S: c.recs[name].S }));

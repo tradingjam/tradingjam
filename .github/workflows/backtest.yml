@@ -7,7 +7,7 @@ on:
         description: 'Horyzont: 1h (24 godz.), 4h (3 dni), 1d (14 dni), 30d (30 dni)'
         default: '1h'
       mode:
-        description: 'Układ: big (2:1), equal (1:1), equal15 (1:1 bliżej), safe (1:2), auto (model sam wybiera)'
+        description: 'Układ: big (2:1), equal (1:1), equal15 (1:1 bliżej), safe (1:2), auto (model sam wybiera), exits (sposoby zamykania)'
         default: 'big'
 
 jobs:
