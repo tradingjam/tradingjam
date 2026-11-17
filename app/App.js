@@ -758,7 +758,11 @@ function BotScreen({ onBack }) {
     <ScrollView contentContainerStyle={s.page}>
       {back}
       <Text style={[s.title, { marginTop: 10 }]}>🤖 Mój bot</Text>
-      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – trzy wirtualne konta po {start} USDT, prawdziwe ceny BingX, z opłatami i poślizgiem. Aktualizacja {fmtDate(data.updatedAt || b.updatedAt)}.</Text>
+      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – cztery wirtualne konta po {start} USDT, prawdziwe ceny BingX, z opłatami i poślizgiem. Aktualizacja {fmtDate(data.updatedAt || b.updatedAt)}.</Text>
+      {data.resetNote ? <Text style={[s.small, { color: C.accent }]}>{data.resetNote}</Text> : null}
+      {(data.archive || []).slice(0, 1).map(ar => (
+        <Text key={ar.until} style={s.small}>Poprzedni okres (do {fmtDate(ar.until)}, stare zasady): {Object.entries(ar.accounts).map(([k, a]) => `${k} ${a.balance >= 1000 ? '+' : ''}${((a.balance / 1000 - 1) * 100).toFixed(1)}% (${a.wins}/${a.n})`).join(' · ')} – zapisany w archiwum.</Text>
+      ))}
       {Object.entries(accounts).map(([k, a]) => {
         const e = eqOf(a), c = (e / start - 1) * 100;
         return (

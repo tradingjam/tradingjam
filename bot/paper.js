@@ -35,6 +35,9 @@ const ACCOUNTS = {
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
 };
+// Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
+const RESET_TAG = '2026-11-17-metoda2';
+const RESET_NOTE = 'Nowe zasady od 17.11.2026: rozliczanie na świecach 5-min (każda raz), przewaga ≥ 8 pkt, tylko 24 godz., limit ryzyka 5%, bez powtórek po stopie.';
 const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, '..', 'out');
 const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5 };
 const M5 = 5 * 6e4, H1 = 36e5;
@@ -255,7 +258,15 @@ async function main() {
   let prev = loadState();
   if (prev && !prev.accounts && prev.balance !== undefined) prev = { accounts: { A: prev } }; // stary format
   if (!prev) console.log('Bot: pierwszy start – nowe konta po 1000 USDT');
-  const state = { cfg: BASE, version: 2, accounts: {} };
+  const state = { cfg: BASE, version: 2, resetTag: RESET_TAG, resetNote: RESET_NOTE, archive: (prev && prev.archive) || [], accounts: {} };
+  if (prev && prev.accounts && prev.resetTag !== RESET_TAG) {
+    // archiwum poprzedniego okresu: podsumowanie + wszystkie zamknięte transakcje i pozycje otwarte w chwili resetu
+    state.archive.unshift({ tag: prev.resetTag || 'start', until: now, accounts: Object.fromEntries(Object.entries(prev.accounts).map(([k, a]) => [k, {
+      name: a.name, startedAt: a.startedAt, balance: a.balance, closed: a.closed, openAtReset: a.positions,
+      n: a.closed.length, wins: a.closed.filter(p => p.net > 0).length, net: +a.closed.reduce((x, p) => x + p.net, 0).toFixed(2) }])) });
+    console.log('Bot: reset kont (nowe zasady) – poprzedni okres zapisany w archiwum');
+    prev = null;
+  }
   for (const key of Object.keys(ACCOUNTS)) state.accounts[key] = { ...(prev && prev.accounts && prev.accounts[key] ? prev.accounts[key] : fresh(now)), ...ACCOUNTS[key] };
 
   const tick = await X.bingxTickers();
