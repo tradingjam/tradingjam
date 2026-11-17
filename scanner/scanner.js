@@ -146,6 +146,8 @@ async function main() {
         // metoda 2: cena wejścia = cena z tickera w chwili zapisu, cel i stop w tej samej odległości procentowej co w scenariuszu
         ...(() => { const sp = r.coin.res[iv].price, lp = r.coin.price > 0 ? r.coin.price : sp, f = lp / sp; return { price: lp, target: r.d.target * f, stop: r.d.stop * f, signalPrice: sp }; })(),
         status: 'open', method: 2,
+        // zbieranie danych do przyszłego testu: funding w chwili zapisu (BingX, jeśli dostępny)
+        ...(r.coin.funding !== undefined ? { funding: r.coin.funding } : {}), qv: r.coin.qv,
         // do późniejszej analizy, co działa najlepiej
         lift: +r.lift.toFixed(3), skill: r.d.skill !== null ? +r.d.skill.toFixed(4) : null, qv: Math.round(r.coin.qv || 0),
         cat: r.coin.cat || null, btcTrend: btcA && btcA.raw ? +btcA.raw.trend.toFixed(2) : null,

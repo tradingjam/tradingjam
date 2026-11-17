@@ -99,7 +99,8 @@ function bingxTickerRow(t) {
   const base = t.symbol.replace(/-USDT$/, '');
   const price = num(t.lastPrice);
   const qv = t.quoteVolume !== undefined ? num(t.quoteVolume) : num(t.volume) * price;
-  return { ex: 'bingx', sym: t.symbol, base, price, chg: num(t.priceChangePercent), qv };
+  const bid = t.bidPrice !== undefined ? num(t.bidPrice) : undefined, ask = t.askPrice !== undefined ? num(t.askPrice) : undefined;
+  return { ex: 'bingx', sym: t.symbol, base, price, chg: num(t.priceChangePercent), qv, ...(bid > 0 && ask > 0 ? { bid, ask } : {}) };
 }
 
 async function bingxTickers() {

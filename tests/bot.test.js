@@ -167,3 +167,19 @@ test('zapis stanu jest atomowy i odrzuca uszkodzony stan', () => {
   assert.throws(() => B.saveState(f, { accounts: { A: { balance: NaN, positions: [], closed: [] } } }));
   assert.strictEqual(JSON.parse(fs.readFileSync(f, 'utf8')).accounts.A.balance, 1000); // stary plik nietknięty
 });
+
+test('spread szerszy niż zakładany poślizg blokuje wejście; brak danych o spreadzie nie blokuje', () => {
+  const c = { side: 'LONG', stopPct: 2, movePct: 4, tickerPrice: 100, signalPrice: 100 };
+  assert.strictEqual(B.rejectEntry(c, { price: 100, qv: 1e7, bid: 99.8, ask: 100.2 }, 0, 0), 'za szeroki spread');
+  assert.strictEqual(B.rejectEntry(c, { price: 100, qv: 1e7, bid: 99.99, ask: 100.01 }, 0, 0), null);
+  assert.strictEqual(B.rejectEntry(c, { price: 100, qv: 1e7 }, 0, 0), null);
+});
+
+test('tryb obserwacji: spadek equity od szczytu albo seria złych wyników', () => {
+  assert.match(B.observeCheck({ peakEquity: 1100, closed: [] }, 980), /spadek equity/);
+  assert.strictEqual(B.observeCheck({ peakEquity: 1000, closed: [] }, 950), null);
+  const bad = Array.from({ length: 30 }, () => ({ r: -0.4 }));
+  assert.match(B.observeCheck({ peakEquity: 1000, closed: bad }, 990), /ostatnie 30/);
+  const ok = Array.from({ length: 30 }, (_, i) => ({ r: i % 2 ? 2 : -1 }));
+  assert.strictEqual(B.observeCheck({ peakEquity: 1000, closed: ok }, 1000), null);
+});

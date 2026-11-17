@@ -28,6 +28,9 @@ const BASE = {
   horizons: ['1h'],
   maxResultsAgeMs: 3 * 36e5, // starsze wyniki skanu → brak nowych wejść
   dayTZ: 'Europe/Warsaw', method: 2,
+  // tryb obserwacji (brak nowych wejść, wyjście tylko ręcznie: BOT_RESUME=1): spadek equity od szczytu ≥ 10%
+  // albo suma wyników ostatnich 30 transakcji ≤ −10R (model wyraźnie gorszy niż w teście)
+  observeDD: 0.10, observeN: 30, observeR: -10,
 };
 const ACCOUNTS = {
   A: { name: 'Duży zysk 2:1', desc: 'Zielone scenariusze w układzie 2:1 (cel 2× dalej niż stop).' },
@@ -170,11 +173,22 @@ function candidates(key, res) {
   return out.sort((a, b) => (key === 'C' ? b.ev - a.ev : b.lift - a.lift));
 }
 
+// tryb obserwacji: zwraca powód albo null
+function observeCheck(st, equity) {
+  const peak = Math.max(st.peakEquity || BASE.startBalance, equity);
+  if ((peak - equity) / peak >= BASE.observeDD) return `spadek equity ${((peak - equity) / peak * 100).toFixed(1)}% od szczytu`;
+  const last = st.closed.slice(0, BASE.observeN);
+  if (last.length >= BASE.observeN) { const sum = last.reduce((a, p) => a + (p.r || 0), 0); if (sum <= BASE.observeR) return `ostatnie ${BASE.observeN} transakcji: ${sum.toFixed(1)}R`; }
+  return null;
+}
+
 // walidacja wejścia – zwraca powód odrzucenia albo null
 function rejectEntry(c, live, now, resAgeMs) {
   if (resAgeMs > BASE.maxResultsAgeMs) return 'nieaktualne wyniki skanu';
   if (!live || !(live.price > 0) || !isFinite(live.price)) return 'brak ceny';
   if (live.qv < BASE.minQv) return 'mały obrót';
+  // spread: połowa spreadu to koszt wejścia ponad model kosztów – odrzucamy, gdy przekracza zakładany poślizg
+  if (live.bid > 0 && live.ask > 0 && (live.ask - live.bid) / 2 / live.price > BASE.slipPct) return 'za szeroki spread';
   if (c.side !== 'LONG' && c.side !== 'SHORT') return 'zły kierunek';
   const stp = c.stopPct / 100, tgt = c.movePct / 100;
   if (!(stp > 0.001 && stp < 0.5) || !(tgt > 0 && tgt < 1)) return 'zły cel/stop';
@@ -208,16 +222,23 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   if (!st.day.halted && (st.day.startEquity - equity) / st.day.startEquity >= BASE.dailyLossPct) {
     st.day.halted = true; st.log.unshift(`${stamp(now)} dzienny limit straty (−${(BASE.dailyLossPct * 100).toFixed(0)}% equity) – brak nowych wejść do końca dnia`);
   }
-  // 3. wejścia
-  let opened = 0; const resAge = now - Date.parse(res.generatedAt || 0);
-  if (!st.day.halted) {
+  // 2b. tryb obserwacji – pogorszenie wyników
+  const obs = observeCheck(st, equity);
+  if (obs && !st.observe) { st.observe = { since: now, reason: obs }; st.log.unshift(`${stamp(now)} TRYB OBSERWACJI: ${obs} – brak nowych wejść do ręcznego wznowienia`); }
+  if (st.observe && process.env.BOT_RESUME === '1') { st.log.unshift(`${stamp(now)} wznowiono handel (ręcznie)`); st.observe = null; st.peakEquity = equity; }
+  // 3. wejścia (z zapisem powodów odrzucenia)
+  let opened = 0; const resAge = now - Date.parse(res.generatedAt || 0); const rej = {};
+  const skip = r => { rej[r] = (rej[r] || 0) + 1; };
+  if (st.day.halted) skip('dzienny limit straty');
+  else if (st.observe) skip('tryb obserwacji');
+  else {
     for (const c of candidates(key, res)) {
-      if (st.positions.length >= BASE.maxOpen) break;
+      if (st.positions.length >= BASE.maxOpen) { skip('maks. liczba pozycji'); break; }
       const live = byBase.get(E.cleanBase(c.coin.base));
-      if (rejectEntry(c, live, now, resAge)) continue;
-      if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) continue;
+      const why = rejectEntry(c, live, now, resAge); if (why) { skip(why); continue; }
+      if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) { skip('już otwarta pozycja na coinie'); continue; }
       // ten sam coin w tym samym kierunku dopiero po upływie horyzontu poprzedniej pozycji (jak w teście na historii)
-      if (st.closed.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base) && p.side === c.side && p.openedAt + H_MS[p.iv] > now)) continue;
+      if (st.closed.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base) && p.side === c.side && p.openedAt + H_MS[p.iv] > now)) { skip('przerwa po poprzedniej pozycji'); continue; }
       const tgt = c.movePct / 100, stp = c.stopPct / 100;
       const entry = fill(live.price, c.side, true);
       const eqNow = st.balance + unrealized(st, byBase);
@@ -225,16 +246,17 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       let qty = (eqNow * BASE.riskPct) / (entry * stp + costPerUnit(entry));
       // limit łącznego ryzyka otwartych pozycji
       const riskRoom = eqNow * BASE.maxOpenRisk - st.positions.reduce((a, p) => a + openRisk(p), 0);
-      if (riskRoom <= eqNow * BASE.riskPct * 0.3) break;
+      if (riskRoom <= eqNow * BASE.riskPct * 0.3) { skip('limit łącznego ryzyka'); break; }
       qty = Math.min(qty, riskRoom / (entry * stp + costPerUnit(entry)));
       // limit dźwigni
       const room = eqNow * BASE.maxLeverage - st.positions.reduce((a, p) => a + p.entry * p.qty, 0);
-      if (room <= eqNow * 0.05) break;
+      if (room <= eqNow * 0.05) { skip('limit dźwigni'); break; }
       if (qty * entry > room) qty = room / entry;
       const pos = {
         id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + H_MS[c.iv] * (key === 'D' ? 2 : 1),
         entry, qty, target: c.side === 'LONG' ? entry * (1 + tgt) : entry * (1 - tgt), stop: c.side === 'LONG' ? entry * (1 - stp) : entry * (1 + stp),
-        p: +c.p.toFixed(3), ev: +c.ev.toFixed(2), checkedTo: now, method: BASE.method,
+        p: +c.p.toFixed(3), ev: +c.ev.toFixed(2), lift: +c.lift.toFixed(3), costR: +(costPerUnit(entry) / (entry * stp)).toFixed(3), checkedTo: now, method: BASE.method,
+        ...(live.bid > 0 ? { spreadPct: +((live.ask - live.bid) / live.price * 100).toFixed(3) } : { spreadPct: null }),
         ...(key === 'D' ? { trail: true, rDist: entry * stp, best: entry } : {}),
       };
       pos.risk = openRisk(pos);
@@ -247,6 +269,8 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   // 4. saldo, equity, ryzyko
   const eqEnd = st.balance + unrealized(st, byBase);
   st.openRiskPct = +(st.positions.reduce((a, p) => a + openRisk(p), 0) / eqEnd * 100).toFixed(2);
+  st.peakEquity = Math.max(st.peakEquity || BASE.startBalance, eqEnd);
+  st.lastScan = { at: now, opened, rejected: rej, long: st.positions.filter(p => p.side === 'LONG').length, short: st.positions.filter(p => p.side === 'SHORT').length };
   st.equity.push([now, +st.balance.toFixed(2), +eqEnd.toFixed(2)]);
   st.equity = st.equity.slice(-24 * 90); st.closed = st.closed.slice(0, 1000); st.log = st.log.slice(0, 200);
   return `${key} ${ACCOUNTS[key].name}: saldo ${st.balance.toFixed(2)}, equity ${eqEnd.toFixed(2)}, otwarte ${st.positions.length} (ryzyko ${st.openRiskPct}%), nowe ${opened}${st.day.halted ? ', limit dzienny' : ''}`;
@@ -289,4 +313,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
