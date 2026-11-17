@@ -6,6 +6,9 @@ on:
       sym:
         description: 'Para z Binance (np. PAXGUSDT)'
         default: 'PAXGUSDT'
+      mode:
+        description: 'scalp (1m/5m) albo swing (1h/4h/1d)'
+        default: 'swing'
 
 jobs:
   test:
@@ -16,7 +19,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Test na historii (1m i 5m)
+      - name: Test na historii
         env:
           SYM: ${{ inputs.sym }}
+          GOLD_MODE: ${{ inputs.mode }}
         run: node scripts/backtest-gold.js
