@@ -1,0 +1,22 @@
+name: Test scalpingu złota
+
+on:
+  workflow_dispatch:
+    inputs:
+      sym:
+        description: 'Para z Binance (np. PAXGUSDT)'
+        default: 'PAXGUSDT'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test na historii (1m i 5m)
+        env:
+          SYM: ${{ inputs.sym }}
+        run: node scripts/backtest-gold.js
