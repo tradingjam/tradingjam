@@ -337,6 +337,12 @@ async function main() {
       const row = (lbl, P) => { const R = P.map(x => x.alt['1/2']); const w = R.filter(v => v > 0).length; const av = R.reduce((a, b) => a + b, 0) / (R.length || 1);
         console.log(`${lbl.padEnd(46)} ${String(R.length).padStart(4)} scen. · na plus ${(w / (R.length || 1) * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R`); };
       console.log(`\n=== LONG vs SHORT (zielone, stop ≥ 1,3%) ===`);
+      const liveFrom = Date.parse('2026-11-14T12:00:00Z'), liveTo = Date.parse('2026-11-16T19:40:00Z');
+      console.log('--- okres, w którym grał bot na żywo (14.11 12:00 – 16.11 20:40, przed poprawkami) ---');
+      for (const [sn, sf] of [['przewaga ≥ 5 pkt (jak bot wtedy)', x => true], ['przewaga ≥ 8 pkt', x => x.lift >= 0.08]]) for (const side of ['L', 'S', 'LS'])
+        row(`${sn} · ${side === 'LS' ? 'razem' : side === 'L' ? 'LONG' : 'SHORT'}`, picks.filter(x => sf(x) && side.includes(x.side) && x.t >= liveFrom && x.t <= liveTo && x.alt && x.sf >= 0.013));
+      const lp = picks.filter(x => x.t >= liveFrom && x.t <= liveTo);
+      console.log('coiny w teście w tym okresie: ' + [...new Set(lp.map(x => x.coin.split(':')[1] + (x.side === 'L' ? '↑' : '↓')))].slice(0, 40).join(' '));
       for (const [sn, sf] of [['przewaga ≥ 5 pkt', x => true], ['przewaga ≥ 8 pkt', x => x.lift >= 0.08]]) for (const side of ['L', 'S']) for (const [pn, pf] of [['cały test', x => true], ['ostatnie 3 tyg.', x => x.t >= recent]]) {
         row(`${sn} · ${side === 'L' ? 'LONG ' : 'SHORT'} · ${pn}`, picks.filter(x => sf(x) && x.side === side && pf(x) && x.alt && x.sf >= 0.013));
       }
