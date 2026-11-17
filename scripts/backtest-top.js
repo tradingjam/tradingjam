@@ -331,6 +331,16 @@ async function main() {
         console.log(line);
       }
     }
+    // ---- Long vs short, całość i ostatnie ~3 tygodnie (stop min. 1,3%, cel 2:1, po kosztach) ----
+    {
+      const tEnd = picks.length ? picks[picks.length - 1].t : 0, recent = tEnd - 21 * 864e5;
+      const row = (lbl, P) => { const R = P.map(x => x.alt['1/2']); const w = R.filter(v => v > 0).length; const av = R.reduce((a, b) => a + b, 0) / (R.length || 1);
+        console.log(`${lbl.padEnd(46)} ${String(R.length).padStart(4)} scen. · na plus ${(w / (R.length || 1) * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R`); };
+      console.log(`\n=== LONG vs SHORT (zielone, stop ≥ 1,3%) ===`);
+      for (const [sn, sf] of [['przewaga ≥ 5 pkt', x => true], ['przewaga ≥ 8 pkt', x => x.lift >= 0.08]]) for (const side of ['L', 'S']) for (const [pn, pf] of [['cały test', x => true], ['ostatnie 3 tyg.', x => x.t >= recent]]) {
+        row(`${sn} · ${side === 'L' ? 'LONG ' : 'SHORT'} · ${pn}`, picks.filter(x => sf(x) && x.side === side && pf(x) && x.alt && x.sf >= 0.013));
+      }
+    }
     // ---- Symulacja portfela jak w bocie: limit pozycji, łączna dźwignia, koszty rynkowe vs zlecenia z limitem ----
     {
       const cand = new Map(); for (const x of picks) { if (!cand.has(x.t)) cand.set(x.t, []); cand.get(x.t).push(x); }
