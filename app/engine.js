@@ -153,6 +153,22 @@ function zscore(F) {
   return F.map(r => (r ? r.map((x, q) => (x - mu[q]) / sd[q]) : null));
 }
 
+// Normalizacja bez zaglądania w przyszłość: średnia i rozrzut liczone tylko z wierszy do indeksu `upto` włącznie.
+// W teście walk-forward każde douczenie modelu używa statystyk z danych dostępnych w chwili douczenia.
+function zstats(F, upto) {
+  let d = 0, cnt = 0; for (let i = 0; i <= upto && i < F.length; i++) if (F[i]) { d = F[i].length; break; }
+  const mu = new Array(d).fill(0), sd = new Array(d).fill(0);
+  for (let i = 0; i <= upto && i < F.length; i++) if (F[i]) { cnt++; for (let q = 0; q < d; q++) mu[q] += F[i][q]; }
+  if (!cnt) return null;
+  for (let q = 0; q < d; q++) mu[q] /= cnt;
+  for (let i = 0; i <= upto && i < F.length; i++) if (F[i]) for (let q = 0; q < d; q++) sd[q] += (F[i][q] - mu[q]) ** 2;
+  for (let q = 0; q < d; q++) sd[q] = Math.sqrt(sd[q] / cnt) || 1;
+  return { mu, sd };
+}
+const applyZ = (F, st) => F.map(r => (r && st ? r.map((x, q) => (x - st.mu[q]) / st.sd[q]) : null));
+// fz(t) → tablica Z znormalizowana statystykami z wierszy ≤ t (z pamięcią podręczną)
+function foldZ(F) { const cache = new Map(); return t => { if (!cache.has(t)) cache.set(t, applyZ(F, zstats(F, t))); return cache.get(t); }; }
+
 function baseRates(Y, idx) {
   let u = 0, dn = 0, nn = 0;
   for (const i of idx) { if (Y[i] === 1) u++; else if (Y[i] === -1) dn++; else nn++; }
@@ -192,14 +208,15 @@ function brier(p, y) {
 }
 
 // Model kierunkowy dla trybu „Bezpieczny cel”. Y: 1 = cel pierwszy, -1 = stop pierwszy, 0 = nic
-function dirModel(Z, Y, labelled, cur, H, thr) {
+function dirModel(Z, Y, labelled, cur, H, thr, F) {
+  const fz = typeof F === 'function' ? F : F ? foldZ(F) : null; let Zc = Z;
   let skill = null, hiHit = null, hiN = 0, nVal = 0;
   if (labelled.length >= 500) {
     const vs = labelled.slice(Math.max(300 + H, labelled.length - VALID_N));
     let bm = 0, bb = 0, hits = 0, cnt = 0, model = null, fittedAt = -Infinity;
     for (const t of vs) {
-      if (t - fittedAt >= REFIT_EVERY) { model = fitModel(Z, Y, labelled.filter(i => i <= t - H), model && model.W); fittedAt = t; }
-      const p = predictP(model, Z[t]);
+      if (t - fittedAt >= REFIT_EVERY) { if (fz) Zc = fz(t); model = fitModel(Zc, Y, labelled.filter(i => i <= t - H), model && model.W); fittedAt = t; }
+      const p = predictP(model, Zc[t]);
       bm += brier(p, Y[t]); bb += brier(model.prior, Y[t]);
       if (p[0] >= thr) { cnt++; if (Y[t] === 1) hits++; }
     }
@@ -215,7 +232,7 @@ function analyze(k, iv, ctx, k4) {
   const n = k.c.length; const cur = n - 2; // ostatnia ZAMKNIĘTA świeca
   const { F, raw } = buildFeatures(k, ctx, k4);
   if (!F[cur]) return { error: 'Za mało danych' };
-  const Z = zscore(F);
+  const Z = zscore(F); const fz = foldZ(F); // fz: normalizacja walk-forward (bez danych z przyszłości)
   const Y = outcomes(k, raw, H, m);
   const labelled = [];
   for (let i = 0; i <= cur - H; i++) if (Z[i] && Y[i] !== null) labelled.push(i);
@@ -226,13 +243,14 @@ function analyze(k, iv, ctx, k4) {
   if (labelled.length >= 500) {
     const vs = labelled.slice(Math.max(300 + H, labelled.length - VALID_N)); // min. 300 świec nauki przed testem
     let bm = 0, bb = 0, hits = 0, cnt = 0;
-    let model = null, fittedAt = -Infinity;
+    let model = null, fittedAt = -Infinity; let Zc = Z;
     for (const t of vs) {
       if (t - fittedAt >= REFIT_EVERY) {
         const train = labelled.filter(i => i <= t - H);
-        model = fitModel(Z, Y, train, model && model.W); fittedAt = t;
+        Zc = fz(t); // normalizacja tylko z danych do chwili douczenia
+        model = fitModel(Zc, Y, train, model && model.W); fittedAt = t;
       }
-      const p = predictP(model, Z[t]);
+      const p = predictP(model, Zc[t]);
       bm += brier(p, Y[t]); bb += brier(model.prior, Y[t]);
       const e = p[0] - p[1];
       if (Math.abs(e) >= EDGE_MIN) { cnt++; if ((e > 0 && Y[t] === 1) || (e < 0 && Y[t] === -1)) hits++; }
@@ -252,8 +270,8 @@ function analyze(k, iv, ctx, k4) {
   const YL = outcomes(k, raw, H, tg, st);
   const YS = outcomes(k, raw, H, st, tg).map(y => (y === null ? null : -y));
   const safe = {
-    long: dirModel(Z, YL, lab(YL), cur, H, SAFE.thr),
-    short: dirModel(Z, YS, lab(YS), cur, H, SAFE.thr),
+    long: dirModel(Z, YL, lab(YL), cur, H, SAFE.thr, fz),
+    short: dirModel(Z, YS, lab(YS), cur, H, SAFE.thr, fz),
     levels: { longT: price + tg * r.atr, longS: price - st * r.atr, shortT: price - tg * r.atr, shortS: price + st * r.atr },
   };
   // Tryb „Duży cel” (2:1)
@@ -261,8 +279,8 @@ function analyze(k, iv, ctx, k4) {
   const YLb = outcomes(k, raw, H, tgB, stB);
   const YSb = outcomes(k, raw, H, stB, tgB).map(y => (y === null ? null : -y));
   const big = {
-    long: dirModel(Z, YLb, lab(YLb), cur, H, BIG.thr),
-    short: dirModel(Z, YSb, lab(YSb), cur, H, BIG.thr),
+    long: dirModel(Z, YLb, lab(YLb), cur, H, BIG.thr, fz),
+    short: dirModel(Z, YSb, lab(YSb), cur, H, BIG.thr, fz),
     levels: { longT: price + tgB * r.atr, longS: price - stB * r.atr, shortT: price - tgB * r.atr, shortS: price + stB * r.atr },
   };
   // Zmiana trendu: czy w ciągu H świec cena zamknie się po drugiej stronie średniej EMA50
@@ -279,7 +297,7 @@ function analyze(k, iv, ctx, k4) {
     const labB = labelled.filter(i => YB[i] !== null);
     const e50 = price - r.trend * r.atr;
     if (labB.length >= 60) {
-      const m = dirModel(Z, YB, labB, cur, H, 0.5);
+      const m = dirModel(Z, YB, labB, cur, H, 0.5, fz);
       brk = { side: side > 0 ? 'up' : 'down', level: e50, ...m, nHist: labB.length };
     } else brk = { side: side > 0 ? 'up' : 'down', level: e50, p: null, nHist: labB.length };
   }
@@ -570,25 +588,32 @@ function catOf(base, cg) {
 
 // ---------- Historia wyników: rozliczanie zapisanych scenariuszy ----------
 const HORIZON_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5, '1d': 14 * 864e5, '30d': 30 * 864e5 };
-// path: świece 1h { t, h, l, c } (t = czas otwarcia). Pierwsze dotknięcie celu albo stopu;
-// gdy w jednej świecy padają oba – liczymy stop (ostrożnie). Po czasie bez rozstrzygnięcia – „expired”.
+// path: świece 1h { t, h, l, c } (t = czas otwarcia), tylko zamknięte. Zasady (metoda 2, od 16.11.2026):
+// • świeca, w której zapisano scenariusz: liczymy w niej tylko stop (nie wiemy, czy ruch był przed, czy po zapisie –
+//   wariant ostrożny); cel dopiero od pierwszej pełnej świecy po zapisie,
+// • gdy w jednej świecy padają cel i stop – liczymy stop,
+// • liczą się tylko świece kończące się najpóźniej o czasie końca scenariusza (ruch po końcu nie zalicza celu),
+// • po czasie: wynik z zamknięcia ostatniej świecy przed końcem; brak danych → „expired” z noData, bez wymyślania ceny.
 function resolvePick(pk, path, now = Date.now()) {
   if (!pk || pk.status !== 'open' || !path || !path.t) return pk;
-  const long = pk.dir === 'LONG';
+  const long = pk.dir === 'LONG'; const B = 36e5;
   let last = null;
   for (let i = 0; i < path.t.length; i++) {
     const t = path.t[i];
-    if (t < pk.t) continue;
-    if (t >= pk.end) break;
-    last = i;
+    if (t + B <= pk.t) continue;            // świeca skończona przed zapisem
+    if (t + B > pk.end) break;              // świeca kończy się po końcu scenariusza
+    if (t + B > now) break;                 // świeca jeszcze trwa
+    const entryBar = t < pk.t;
     const hitS = long ? path.l[i] <= pk.stop : path.h[i] >= pk.stop;
-    const hitT = long ? path.h[i] >= pk.target : path.l[i] <= pk.target;
-    if (hitS) return { ...pk, status: 'loss', closedAt: t + 36e5, r: -1 };
-    if (hitT) return { ...pk, status: 'win', closedAt: t + 36e5, r: +(Math.abs(pk.target - pk.price) / Math.abs(pk.price - pk.stop)).toFixed(2) };
+    const hitT = !entryBar && (long ? path.h[i] >= pk.target : path.l[i] <= pk.target);
+    if (!entryBar) last = i;
+    if (hitS) return { ...pk, status: 'loss', closedAt: t + B, r: -1 };
+    if (hitT) return { ...pk, status: 'win', closedAt: t + B, r: +(Math.abs(pk.target - pk.price) / Math.abs(pk.price - pk.stop)).toFixed(2) };
   }
   const lastT = path.t.length ? path.t[path.t.length - 1] : 0;
-  if (now >= pk.end && lastT + 36e5 >= pk.end) {
-    const exit = last !== null ? path.c[last] : pk.price;
+  if (now >= pk.end && lastT + B >= pk.end) {
+    if (last === null) return { ...pk, status: 'expired', closedAt: pk.end, r: 0, noData: true };
+    const exit = path.c[last];
     const r = ((long ? exit - pk.price : pk.price - exit) / Math.abs(pk.price - pk.stop));
     return { ...pk, status: 'expired', closedAt: pk.end, r: +r.toFixed(2) };
   }
@@ -632,7 +657,7 @@ function historyBreakdown(list0, iv) {
 }
 
 // Wnętrze modelu – do eksperymentów (scripts/backtest-top.js)
-const _internal = { buildFeatures, zscore, outcomes, fitModel, predictP, brier, baseRates };
+const _internal = { buildFeatures, zscore, zstats, applyZ, foldZ, outcomes, fitModel, predictP, brier, baseRates };
 
 // Jak powstaje procent – krótko, do aplikacji i poradnika
 const HOW_P = [

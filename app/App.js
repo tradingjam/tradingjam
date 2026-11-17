@@ -782,7 +782,9 @@ function BotScreen({ onBack }) {
         <View style={{ marginTop: 10 }}><Sparkline data={b.equity.map(e => e[2])} h={60} /></View>
         <Text style={[s.li, { marginTop: 8 }]}>Zamknięte: <Text style={{ fontWeight: '800' }}>{n}</Text> · na plus: {wins} ({n ? pct0(wins / n) : '–'})</Text>
         <Text style={s.li}>Wynik zamkniętych: <Text style={{ color: sumNet >= 0 ? C.up : C.down, fontWeight: '800' }}>{sumNet >= 0 ? '+' : ''}{sumNet.toFixed(2)} USDT</Text> · opłaty i poślizg: −{fees.toFixed(2)} USDT</Text>
-        <Text style={s.small}>Wspólne zasady: ryzyko {((cfg.riskPct || 0.01) * 100).toFixed(0)}% bieżącego salda na pozycję (zyski same się procentują) · maks. {cfg.maxOpen || 5} pozycji · dźwignia łącznie maks. {cfg.maxLeverage || 3}× · po stracie {((cfg.dailyLossPct || 0.03) * 100).toFixed(0)}% w ciągu dnia – przerwa do jutra.</Text>
+        {b.openRiskPct !== undefined ? <Text style={s.li}>Możliwa strata otwartych pozycji (przy stopach, z kosztami): {b.openRiskPct}% equity · limit {((cfg.maxOpenRisk || 0.05) * 100).toFixed(0)}%{b.day && b.day.halted ? ' · dziś limit dzienny – brak nowych wejść' : ''}</Text> : null}
+        <Text style={s.small}>Wspólne zasady: ryzyko {((cfg.riskPct || 0.01) * 100).toFixed(0)}% equity na pozycję (z prowizjami) · łącznie maks. {((cfg.maxOpenRisk || 0.05) * 100).toFixed(0)}% w otwartych pozycjach · maks. {cfg.maxOpen || 5} pozycji · dźwignia łącznie maks. {cfg.maxLeverage || 3}× · po stracie {((cfg.dailyLossPct || 0.03) * 100).toFixed(0)}% equity w ciągu dnia (czas polski) – przerwa do jutra.</Text>
+        <Text style={s.small}>Mierzone dokładnie: ceny i świece BingX, prowizje 0,05% i zakładany poślizg 0,05% na stronę. Przybliżone: poślizg przy dużych ruchach, kolejność ruchów wewnątrz świecy (gdy w jednej świecy jest cel i stop, liczymy stop), funding nie jest liczony. Rozliczanie wg metody 2 od 17.11.2026 (świece 5-minutowe, każda raz).</Text>
       </View>
       <Text style={s.h3}>Otwarte pozycje ({b.positions.length})</Text>
       {b.positions.length ? b.positions.map(p => (

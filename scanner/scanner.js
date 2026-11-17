@@ -143,7 +143,9 @@ async function main() {
       history.push({
         id: `${now}-${iv}-${r.coin.ex}-${r.coin.sym}-${r.d.dir}`, t: now, end: now + E.HORIZON_MS[iv], iv, mode: 'big',
         ex: r.coin.ex, sym: r.coin.sym, base: r.coin.base, dir: r.d.dir, p: +r.d.p.toFixed(3), hist: r.d.hist !== null ? +r.d.hist.toFixed(3) : null,
-        price: r.coin.res[iv].price, target: r.d.target, stop: r.d.stop, status: 'open',
+        // metoda 2: cena wejścia = cena z tickera w chwili zapisu, cel i stop w tej samej odległości procentowej co w scenariuszu
+        ...(() => { const sp = r.coin.res[iv].price, lp = r.coin.price > 0 ? r.coin.price : sp, f = lp / sp; return { price: lp, target: r.d.target * f, stop: r.d.stop * f, signalPrice: sp }; })(),
+        status: 'open', method: 2,
         // do późniejszej analizy, co działa najlepiej
         lift: +r.lift.toFixed(3), skill: r.d.skill !== null ? +r.d.skill.toFixed(4) : null, qv: Math.round(r.coin.qv || 0),
         cat: r.coin.cat || null, btcTrend: btcA && btcA.raw ? +btcA.raw.trend.toFixed(2) : null,

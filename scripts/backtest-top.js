@@ -26,7 +26,8 @@ const VALID_N = 1000, REFIT = 200, BE = LEV[1] / (LEV[0] + LEV[1]);
 // ---------- Wątek: dane i predykcje per coin ----------
 function features(k, ctx, k4) {
   const { F, raw } = I.buildFeatures(k, ctx, k4);
-  return { Z: I.zscore(F), raw };
+  const Z = I.zscore(F); Z.F = F; // Z.F: surowe cechy do normalizacji walk-forward
+  return { Z, raw };
 }
 function labels(k, raw, H, lev = LEV) {
   const tg = lev[0] * SCALE, st = lev[1] * SCALE;
@@ -36,10 +37,10 @@ function labels(k, raw, H, lev = LEV) {
 function walk(Z, Y, lab, H, l2, btcAt) {
   const out = []; if (lab.length < 500) return out;
   const vs = lab.slice(Math.max(300 + H, lab.length - VALID_N));
-  let model = null, fittedAt = -Infinity, bm = 0, bb = 0, n = 0;
+  let model = null, fittedAt = -Infinity, bm = 0, bb = 0, n = 0; const fz = Z.F ? I.foldZ(Z.F) : null; let Zc = Z;
   for (const t of vs) {
-    if (t - fittedAt >= REFIT) { model = I.fitModel(Z, Y, lab.filter(i => i <= t - H), model && model.W, l2); fittedAt = t; }
-    const p = I.predictP(model, Z[t]);
+    if (t - fittedAt >= REFIT) { if (fz) Zc = fz(t); model = I.fitModel(Zc, Y, lab.filter(i => i <= t - H), model && model.W, l2); fittedAt = t; }
+    const p = I.predictP(model, Zc[t]);
     const rskill = n >= 100 && bb > 0 ? 1 - bm / bb : null;
     out.push({ i: t, p: p[0], prior: model.prior[0], y: Y[t], rskill, bt: btcAt ? btcAt(t) : null, ct: walk.raw && walk.raw[t] ? walk.raw[t].trend : null, br: walk.br ? walk.br(t) : null });
     // skill liczony tylko z wcześniejszych punktów testu (bez zaglądania w przyszłość)
