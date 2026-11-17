@@ -22,7 +22,10 @@ const X = require('../app/exchanges.js');
 
 const BASE = {
   startBalance: 1000, riskPct: 0.01, maxOpenRisk: 0.05, maxOpen: 8, maxLeverage: 3,
-  feePct: 0.0005, slipPct: 0.0005, dailyLossPct: 0.03, horizons: ['1h', '4h'], minQv: 3e5,
+  feePct: 0.0005, slipPct: 0.0005, dailyLossPct: 0.03, minQv: 3e5,
+  // 3 dni wstrzymane 17.11.2026: w teście z ostatnich 3 tygodni i longi, i shorty na minusie, na żywo 23% trafień.
+  // 24 godz. w tym samym okresie na plus w obu kierunkach. Do ponownej oceny na przeglądzie.
+  horizons: ['1h'],
   maxResultsAgeMs: 3 * 36e5, // starsze wyniki skanu → brak nowych wejść
   dayTZ: 'Europe/Warsaw', method: 2,
 };
