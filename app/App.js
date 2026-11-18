@@ -758,7 +758,7 @@ function BotScreen({ onBack }) {
     <ScrollView contentContainerStyle={s.page}>
       {back}
       <Text style={[s.title, { marginTop: 10 }]}>🤖 Mój bot</Text>
-      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – cztery wirtualne konta po {start} USDT, prawdziwe ceny BingX, z opłatami i poślizgiem. Aktualizacja {fmtDate(data.updatedAt || b.updatedAt)}.</Text>
+      <Text style={s.small}>Tryb: <Text style={{ color: C.warn, fontWeight: '800' }}>NA SUCHO</Text> – pięć wirtualnych kont po {start} USDT, prawdziwe ceny BingX, z opłatami i poślizgiem. Aktualizacja {fmtDate(data.updatedAt || b.updatedAt)}.</Text>
       {data.resetNote ? <Text style={[s.small, { color: C.accent }]}>{data.resetNote}</Text> : null}
       {(data.archive || []).slice(0, 1).map(ar => (
         <Text key={ar.until} style={s.small}>Poprzedni okres (do {fmtDate(ar.until)}, stare zasady): {Object.entries(ar.accounts).map(([k, a]) => `${k} ${a.balance >= 1000 ? '+' : ''}${((a.balance / 1000 - 1) * 100).toFixed(1)}% (${a.wins}/${a.n})`).join(' · ')} – zapisany w archiwum.</Text>
@@ -796,7 +796,7 @@ function BotScreen({ onBack }) {
       {b.positions.length ? b.positions.map(p => (
         <View key={p.id} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : '3 dni'} · {p.mode === 'equal' ? '1:1' : '2:1'}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : '3 dni'} · {p.mode === 'equal' ? '1:1' : p.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
             <Text style={s.small}>wejście {fmtPrice(p.entry)} · cel {fmtPrice(p.target)} · stop {fmtPrice(p.stop)}</Text>
             <Text style={s.small}>od {fmtDate(p.openedAt)} · koniec {fmtDate(p.end)} · ryzyko {p.risk.toFixed(2)} USDT</Text>
           </View>
@@ -806,7 +806,7 @@ function BotScreen({ onBack }) {
       {b.closed.length ? b.closed.slice(0, 30).map(c => (
         <View key={c.id + c.closedAt} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason} · {c.mode === 'equal' ? '1:1' : '2:1'}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason} · {c.mode === 'equal' ? '1:1' : c.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
             <Text style={s.small}>{fmtDate(c.openedAt)} → {fmtDate(c.closedAt)}</Text>
           </View>
           <Text style={{ color: c.net >= 0 ? C.up : C.down, fontWeight: '800' }}>{c.net >= 0 ? '+' : ''}{c.net.toFixed(2)} $</Text>

@@ -5,6 +5,8 @@
 //   B „Częste trafienia 1:1” – zielone scenariusze 1:1, tylko gdy model daje ≥ 55%
 //   C „Złoty środek”         – dla każdego coina bot wybiera układ (2:1 albo 1:1) o wyższym oczekiwanym wyniku po kosztach
 //   D „Ciągnięcie zysku”     – jak A, ale po dojściu do celu nie zamyka, tylko ciągnie stop za ceną (1R za szczytem), max 2× czas
+//   E „Najlepsze z najlepszych” – dla każdego coina model sam wybiera układ 2:1, 1:1 albo 1:2; tylko zielone scenariusze
+//                                z najwyższym oczekiwanym wynikiem po kosztach (≥ 0,2R), ryzyko 0,5% na pozycję, maks. 4 pozycje
 //
 // ZASADY ROZLICZANIA (metoda 2, od 16.11.2026) – stosowane do nowych pozycji i dalszej części już otwartych:
 // • tylko ZAMKNIĘTE świece; każda świeca przetwarzana dokładnie raz (p.checkedTo = koniec ostatniej przetworzonej),
@@ -37,6 +39,7 @@ const ACCOUNTS = {
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
+  E: { name: 'Najlepsze z najlepszych', desc: 'Model sam wybiera układ 2:1, 1:1 albo 1:2 dla każdego coina. Tylko najbardziej opłacalne zielone scenariusze (oczekiwany wynik po kosztach co najmniej 0,2R), połowa ryzyka (0,5% na pozycję), maks. 4 pozycje.', riskPct: 0.005, maxOpen: 4 },
 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
@@ -162,6 +165,10 @@ function candidates(key, res) {
     if (key === 'A') big.forEach(r => out.push(mk(r, 'big')));
     if (key === 'D') big.forEach(r => { const c = mk(r, 'big'); if (c.stopPct >= 1.3) out.push(c); });
     if (key === 'B') eq.forEach(r => out.push(mk(r, 'equal')));
+    if (key === 'E') {
+      // tryb Auto silnika: dla każdego coina układ (2:1 / 1:1 / 1:2) z najwyższym oczekiwanym wynikiem spośród tych, które zdały test
+      for (const r of E.rankTop(res.coins, iv, 'all', 15, 'auto').filter(r => r.tier === 0)) { const c = mk(r, r.d.mode); if (c.ev >= 0.2) out.push(c); }
+    }
     if (key === 'C') {
       const m = new Map();
       for (const c of [...big.map(r => mk(r, 'big')), ...eq.map(r => mk(r, 'equal'))]) {
@@ -170,7 +177,7 @@ function candidates(key, res) {
       for (const c of m.values()) if (c.ev >= 0.1) out.push(c);
     }
   }
-  return out.sort((a, b) => (key === 'C' ? b.ev - a.ev : b.lift - a.lift));
+  return out.sort((a, b) => (key === 'C' || key === 'E' ? b.ev - a.ev : b.lift - a.lift));
 }
 
 // tryb obserwacji: zwraca powód albo null
@@ -199,6 +206,7 @@ function rejectEntry(c, live, now, resAgeMs) {
 }
 
 async function runAccount(key, st, res, byBase, barsFor, now) {
+  const riskPct = ACCOUNTS[key].riskPct || BASE.riskPct, maxOpen = ACCOUNTS[key].maxOpen || BASE.maxOpen;
   // 0. dzień (czas polski) – baza dnia = equity PRZED rozliczeniem tego skanu
   const today = dayKey(now);
   if (!st.day || st.day.date !== today) st.day = { date: today, startEquity: +(st.balance + unrealized(st, byBase)).toFixed(4), halted: false };
@@ -233,7 +241,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   else if (st.observe) skip('tryb obserwacji');
   else {
     for (const c of candidates(key, res)) {
-      if (st.positions.length >= BASE.maxOpen) { skip('maks. liczba pozycji'); break; }
+      if (st.positions.length >= maxOpen) { skip('maks. liczba pozycji'); break; }
       const live = byBase.get(E.cleanBase(c.coin.base));
       const why = rejectEntry(c, live, now, resAge); if (why) { skip(why); continue; }
       if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) { skip('już otwarta pozycja na coinie'); continue; }
@@ -243,10 +251,10 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       const entry = fill(live.price, c.side, true);
       const eqNow = st.balance + unrealized(st, byBase);
       // wielkość pozycji: 1% equity na stratę przy stopie WRAZ z kosztami wejścia i wyjścia
-      let qty = (eqNow * BASE.riskPct) / (entry * stp + costPerUnit(entry));
+      let qty = (eqNow * riskPct) / (entry * stp + costPerUnit(entry));
       // limit łącznego ryzyka otwartych pozycji
       const riskRoom = eqNow * BASE.maxOpenRisk - st.positions.reduce((a, p) => a + openRisk(p), 0);
-      if (riskRoom <= eqNow * BASE.riskPct * 0.3) { skip('limit łącznego ryzyka'); break; }
+      if (riskRoom <= eqNow * riskPct * 0.3) { skip('limit łącznego ryzyka'); break; }
       qty = Math.min(qty, riskRoom / (entry * stp + costPerUnit(entry)));
       // limit dźwigni
       const room = eqNow * BASE.maxLeverage - st.positions.reduce((a, p) => a + p.entry * p.qty, 0);
@@ -262,7 +270,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       pos.risk = openRisk(pos);
       if (!(pos.qty > 0) || !isFinite(pos.qty) || (pos.side === 'LONG' ? !(pos.stop < pos.entry && pos.entry < pos.target) : !(pos.target < pos.entry && pos.entry < pos.stop))) continue;
       st.positions.push(pos);
-      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : '3 dni'}, ${c.mode === 'big' ? '2:1' : '1:1'}) po ${entry.toPrecision(5)}`);
+      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : '3 dni'}, ${c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
       opened++;
     }
   }
