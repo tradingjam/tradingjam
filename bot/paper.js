@@ -5,8 +5,8 @@
 //   B „Częste trafienia 1:1” – zielone scenariusze 1:1, tylko gdy model daje ≥ 55%
 //   C „Złoty środek”         – dla każdego coina bot wybiera układ (2:1 albo 1:1) o wyższym oczekiwanym wyniku po kosztach
 //   D „Ciągnięcie zysku”     – jak A, ale po dojściu do celu nie zamyka, tylko ciągnie stop za ceną (1R za szczytem), max 2× czas
-//   E „Najlepsze z najlepszych” – dla każdego coina model sam wybiera układ 2:1, 1:1 albo 1:2; tylko zielone scenariusze
-//                                z najwyższym oczekiwanym wynikiem po kosztach (≥ 0,2R), ryzyko 0,5% na pozycję, maks. 4 pozycje
+//   E „Najlepsze z najlepszych” – jak najwięcej trafionych: układ 2:1 / 1:1 / 1:2 z najwyższą szansą (≥ 55%), o ile po kosztach
+//                                jest na plus (≥ +0,05R); ryzyko 0,5% na pozycję, maks. 4 pozycje
 //
 // ZASADY ROZLICZANIA (metoda 2, od 16.11.2026) – stosowane do nowych pozycji i dalszej części już otwartych:
 // • tylko ZAMKNIĘTE świece; każda świeca przetwarzana dokładnie raz (p.checkedTo = koniec ostatniej przetworzonej),
@@ -39,7 +39,7 @@ const ACCOUNTS = {
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
-  E: { name: 'Najlepsze z najlepszych', desc: 'Model sam wybiera układ 2:1, 1:1 albo 1:2 dla każdego coina. Tylko najbardziej opłacalne zielone scenariusze (oczekiwany wynik po kosztach co najmniej 0,2R), połowa ryzyka (0,5% na pozycję), maks. 4 pozycje.', riskPct: 0.005, maxOpen: 4 },
+  E: { name: 'Najlepsze z najlepszych', desc: 'Jak najwięcej trafionych przy minimalnym ryzyku: dla każdego coina układ 2:1, 1:1 albo 1:2 z najwyższą szansą trafienia (min. 55%), o ile po kosztach nadal jest na plus. Połowa ryzyka (0,5% na pozycję), maks. 4 pozycje.', riskPct: 0.005, maxOpen: 4 },
 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
@@ -166,8 +166,14 @@ function candidates(key, res) {
     if (key === 'D') big.forEach(r => { const c = mk(r, 'big'); if (c.stopPct >= 1.3) out.push(c); });
     if (key === 'B') eq.forEach(r => out.push(mk(r, 'equal')));
     if (key === 'E') {
-      // tryb Auto silnika: dla każdego coina układ (2:1 / 1:1 / 1:2) z najwyższym oczekiwanym wynikiem spośród tych, które zdały test
-      for (const r of E.rankTop(res.coins, iv, 'all', 15, 'auto').filter(r => r.tier === 0)) { const c = mk(r, r.d.mode); if (c.ev >= 0.2) out.push(c); }
+      // jak najwięcej trafionych przy minimalnym ryzyku: dla każdego coina spośród układów 2:1 / 1:1 / 1:2, które zdały test,
+      // wybieramy ten z NAJWYŻSZĄ szansą trafienia – pod warunkiem, że po kosztach nadal jest na plus (≥ +0,05R) i szansa ≥ 55%
+      const m = new Map();
+      for (const mode of ['big', 'equal', 'safe']) for (const r of E.rankTop(res.coins, iv, 'all', 30, mode).filter(r => r.tier === 0)) {
+        const c = mk(r, mode); if (c.ev < 0.05 || c.p < 0.55) continue;
+        const k = c.coin.base + iv; if (!m.has(k) || c.p > m.get(k).p) m.set(k, c);
+      }
+      out.push(...m.values());
     }
     if (key === 'C') {
       const m = new Map();
@@ -177,7 +183,7 @@ function candidates(key, res) {
       for (const c of m.values()) if (c.ev >= 0.1) out.push(c);
     }
   }
-  return out.sort((a, b) => (key === 'C' || key === 'E' ? b.ev - a.ev : b.lift - a.lift));
+  return out.sort((a, b) => (key === 'E' ? b.p - a.p : key === 'C' ? b.ev - a.ev : b.lift - a.lift));
 }
 
 // tryb obserwacji: zwraca powód albo null
