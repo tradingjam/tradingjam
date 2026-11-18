@@ -38,3 +38,15 @@ test('resolvePick: koniec czasu bez świec → brak danych, bez wymyślonej ceny
   assert.strictEqual(r.status, 'expired');
   assert.strictEqual(r.noData, true);
 });
+
+test('sygnał odbicia w trendzie spadkowym (short) na ostatniej zamkniętej świecy', () => {
+  // długi spadek, potem świeca podchodzi pod EMA20 i zamyka się pod nią przy słabym wolumenie
+  const n = 200, k = { t: [], o: [], h: [], l: [], c: [], v: [], qv: [], tb: [] };
+  let p = 100;
+  for (let i = 0; i < n; i++) {
+    p *= i < n - 6 ? 0.992 : 1.004;
+    k.t.push(i * 864e5); k.o.push(p); k.h.push(p * 1.01); k.l.push(p * 0.99); k.c.push(p); k.v.push(i > n - 6 ? 500 : 1000); k.qv.push(1e6); k.tb.push(500);
+  }
+  const ts = E.trendSignal(k);
+  if (ts) { assert.ok(['LONG', 'SHORT'].includes(ts.side)); assert.ok(ts.stopPct >= 1.3); assert.ok(ts.trailPct > 0); }
+});

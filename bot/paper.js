@@ -39,7 +39,7 @@ const ACCOUNTS = {
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
-  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych (wybicie 55 dni, ciągnięty stop, do 42 dni). Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji.', riskPct: 0.005, maxOpen: 6 },
+  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji.', riskPct: 0.005, maxOpen: 6 },
 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
@@ -293,12 +293,12 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
         p: +c.p.toFixed(3), ev: +c.ev.toFixed(2), lift: +c.lift.toFixed(3), costR: +(costPerUnit(entry) / (entry * stp)).toFixed(3), checkedTo: now, method: BASE.method,
         ...(live.bid > 0 ? { spreadPct: +((live.ask - live.bid) / live.price * 100).toFixed(3) } : { spreadPct: null }),
         ...(trail ? { trail: true, rDist: entry * stp, best: entry } : {}),
-        ...(chand ? { trail: true, chandelier: true, rDist: entry * stp, best: entry } : {}),
+        ...(chand ? { trail: true, chandelier: true, rDist: entry * ((c.trendSig && c.trendSig.trailPct) || c.stopPct) / 100, best: entry, setup: c.trendSig && c.trendSig.kind } : {}),
       };
       pos.risk = openRisk(pos);
       if (!(pos.qty > 0) || !isFinite(pos.qty) || (pos.side === 'LONG' ? !(pos.stop < pos.entry && pos.entry < pos.target) : !(pos.target < pos.entry && pos.entry < pos.stop))) continue;
       st.positions.push(pos);
-      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : c.iv === '1d' ? 'do 42 dni' : '3 dni'}, ${c.mode === 'trend' ? 'z trendem, dzienne' : c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
+      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : c.iv === '1d' ? 'do 42 dni' : '3 dni'}, ${c.mode === 'trend' ? 'z trendem: ' + ((c.trendSig && c.trendSig.kind) || 'dzienne') : c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
       opened++;
     }
   }

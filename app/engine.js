@@ -411,9 +411,17 @@ function trendSignal(k) {
   let hi = -Infinity, lo = Infinity; for (let j = i - TREND_SIG.N; j < i; j++) { if (k.h[j] > hi) hi = k.h[j]; if (k.l[j] < lo) lo = k.l[j]; }
   let side = null;
   if (k.c[i] > hi && r.trend > 0 && r.slope > 0) side = 'LONG'; else if (k.c[i] < lo && r.trend < 0 && r.slope < 0) side = 'SHORT';
+  const px = k.c[i];
+  if (side) { const d = Math.max(TREND_SIG.m * r.atr, px * 0.013); return { side, kind: 'wybicie', t: k.t[i], price: px, stopPct: +(d / px * 100).toFixed(3), trailPct: +(d / px * 100).toFixed(3), atr: r.atr }; }
+  // Odbicie w trendzie (backtest 18.11.2026: 75 coinów, 8 lat, ok. 2100 transakcji, +0,10R po kosztach, obie połówki na plus):
+  // trend (≥ 1 ATR od EMA50, EMA20 w tę samą stronę), świeca dotknęła EMA20 i zamknęła się po stronie trendu,
+  // wolumen poniżej średniej, RSI 40–60. Stop za świecą + 0,5 ATR (min. 1,3%), potem ciągnięty 2 ATR na zamknięciach dnia.
+  let e20 = k.c[0]; const a = 2 / 21; for (let j = 1; j <= i; j++) e20 = a * k.c[j] + (1 - a) * e20;
+  if (r.trend <= -1 && r.slope < 0 && k.h[i] >= e20 && px < e20 && r.volRatio < 1 && r.rsi >= 40 && r.rsi <= 60) side = 'SHORT';
+  else if (r.trend >= 1 && r.slope > 0 && k.l[i] <= e20 && px > e20 && r.volRatio < 1 && r.rsi >= 40 && r.rsi <= 60) side = 'LONG';
   if (!side) return null;
-  const px = k.c[i], d = Math.max(TREND_SIG.m * r.atr, px * 0.013);
-  return { side, t: k.t[i], price: px, stopPct: +(d / px * 100).toFixed(3), atr: r.atr };
+  const d = Math.max(side === 'LONG' ? px - k.l[i] + 0.5 * r.atr : k.h[i] - px + 0.5 * r.atr, px * 0.013);
+  return { side, kind: 'odbicie w trendzie', t: k.t[i], price: px, stopPct: +(d / px * 100).toFixed(3), trailPct: +(2 * r.atr / px * 100).toFixed(3), atr: r.atr };
 }
 
 // ---------- Wynik w zwartej postaci (do JSON i do UI) ----------
