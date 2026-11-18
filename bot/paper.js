@@ -39,7 +39,7 @@ const ACCOUNTS = {
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
-  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji.', riskPct: 0.005, maxOpen: 6 },
+  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
@@ -264,7 +264,10 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   else if (st.observe) skip('tryb obserwacji');
   else {
     for (const c of candidates(key, res)) {
-      if (st.positions.length >= maxOpen) { skip('maks. liczba pozycji'); break; }
+      // konto E: pozycje trendowe (dzienne, długie) mają osobną pulę 3 miejsc, żeby nie wypychały transakcji 24 godz.
+      // (symulacja 18.11.2026: wspólna pula obniżała wynik E z ok. +8,6% do +4,5% mies.)
+      const isTrend = c.mode === 'trend', nTrend = st.positions.filter(p => p.mode === 'trend').length;
+      if (isTrend ? nTrend >= (ACCOUNTS[key].maxTrend || 0) : st.positions.length - nTrend >= maxOpen) { skip(isTrend ? 'maks. pozycji trendowych' : 'maks. liczba pozycji'); continue; }
       const live = byBase.get(E.cleanBase(c.coin.base));
       const why = rejectEntry(c, live, now, resAge); if (why) { skip(why); continue; }
       if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) { skip('już otwarta pozycja na coinie'); continue; }
