@@ -143,16 +143,25 @@ function trendTrades(k, raw, H, P) {
 // Short po wystrzale („pump and dump”): w oknie W świec szczyt ≥ X× dołka sprzed szczytu, cena spadła już ≥ Y od szczytu,
 // ale jest wciąż ≥ 30% nad dołkiem; cena pod EMA20, EMA20 spada, zamknięcie pod SMA10. Stop m×ATR (min. 1,3%),
 // potem ciągnięty od najlepszego zamknięcia; bez stałego celu, maks. 3× horyzont. Jedna pozycja na coin naraz.
-const PUMP_VARIANTS = { 'wystrzał ≥ 2×, spadek ≥ 30%': { X: 2, Y: 0.3, m: 2.5 }, 'wystrzał ≥ 3×, spadek ≥ 40%': { X: 3, Y: 0.4, m: 2.5 }, 'wystrzał ≥ 2×, spadek ≥ 30%, stop 4 ATR': { X: 2, Y: 0.3, m: 4 } };
-function pumpTrades(k, raw, H, P, W) {
-  const n = k.c.length, out = []; let busy = -1; const sma10 = new Array(n).fill(null);
-  for (let i = 9; i < n; i++) { let a = 0; for (let j = i - 9; j <= i; j++) a += k.c[j]; sma10[i] = a / 10; }
+const PUMP_VARIANTS = {
+  'późno: spadek ≥ 30% od szczytu': { X: 2, Y: 0.3, m: 2.5 },
+  'późno + BTC w spadku': { X: 2, Y: 0.3, m: 2.5, btc: true },
+  'wcześnie: spadek ≥ 15%, MA5 pod MA10': { X: 2, Y: 0.15, m: 3, early: true },
+  'wcześnie + BTC w spadku': { X: 2, Y: 0.15, m: 3, early: true, btc: true },
+  'bardzo wcześnie: spadek ≥ 10%, MA5 pod MA10, szczyt ≤ 10 świec temu': { X: 2, Y: 0.10, m: 3, early: true, fresh: 10 },
+};
+function pumpTrades(k, raw, H, P, W, btcAt) {
+  const n = k.c.length, out = []; let busy = -1; const sma10 = new Array(n).fill(null), sma5 = new Array(n).fill(null);
+  for (let i = 9; i < n; i++) { let a = 0; for (let j = i - 9; j <= i; j++) a += k.c[j]; sma10[i] = a / 10; let b = 0; for (let j = i - 4; j <= i; j++) b += k.c[j]; sma5[i] = b / 5; }
   for (let i = W + 20; i < n - 2; i++) {
     if (i <= busy) continue; const r = raw[i]; if (!r || !(r.atr > 0)) continue;
     let pk = -Infinity, pkI = -1; for (let j = i - W; j < i; j++) if (k.h[j] > pk) { pk = k.h[j]; pkI = j; }
     let lo = Infinity; for (let j = Math.max(0, pkI - W); j < pkI; j++) if (k.l[j] < lo) lo = k.l[j];
     const px = k.c[i];
-    if (!(pk / lo >= P.X && px <= pk * (1 - P.Y) && px >= lo * 1.3 && r.slope < 0 && px < sma10[i] && r.trend < 0)) continue;
+    if (!(pk / lo >= P.X && px <= pk * (1 - P.Y) && px >= lo * 1.3)) continue;
+    if (P.early) { if (!(sma5[i] < sma10[i] && px < sma5[i])) continue; } else if (!(r.slope < 0 && px < sma10[i] && r.trend < 0)) continue;
+    if (P.fresh && i - pkI > P.fresh) continue;
+    if (P.btc) { const bt = btcAt(k.t[i]); if (!(bt !== null && bt < 0)) continue; }
     const d = Math.max(P.m * r.atr, px * 0.013), atr = r.atr;
     let stop = px + d, best = px, j, exit = null;
     for (j = i + 1; j < n && j <= i + 3 * H; j++) {
@@ -187,7 +196,8 @@ async function worker() {
       };
       if (PUMP) {
         const f = features(k); const trades = []; const W = BARS === '1d' ? 60 : IV === '4h' ? 180 : 360;
-        for (const [vn, P] of Object.entries(PUMP_VARIANTS)) for (const x of pumpTrades(k, f.raw, H, P, W)) trades.push({ ...x, v: vn });
+        let jb = 0; const btcAt = tt => { while (jb + 1 < btcCtx.t.length && btcCtx.t[jb + 1] <= tt) jb++; if (btcCtx.t[jb] > tt) jb = 0; return btcCtx.t[jb] <= tt ? btcCtx.v[jb][0] : null; };
+        for (const [vn, P] of Object.entries(PUMP_VARIANTS)) { jb = 0; for (const x of pumpTrades(k, f.raw, H, P, W, btcAt)) trades.push({ ...x, v: vn }); }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { rev: trades }, pool: null }); continue;
       }
       if (TREND) {
