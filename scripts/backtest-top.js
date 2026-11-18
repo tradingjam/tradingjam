@@ -98,15 +98,20 @@ function exitsAt(k, i, atr, long, H) {
 // Reguła odwrócenia trendu (tylko dane z zamkniętej świecy i), ta sama co w bocie (konto F):
 // LONG: cena ≥ 1,5 ATR pod EMA50, EMA20 zawraca w górę, cena nad SMA10, RSI 45–65, wolumen wyraźnie powyżej średniej (wskaźnik ≥ 1,05 – górne ok. 30%).
 // Stop 1,5 ATR (min. 1,3% ceny), cel = EMA50 (najwyżej 4× stop), wymagane cel ≥ 1,5× stop. SHORT lustrzanie.
-function reversalAt(k, raw, sma10, i) {
+const REV_VARIANTS = {
+  'ścisła': { tr: 1.5, vol: 1.05, rsiL: [45, 65], rr: 1.5 },
+  'średnia': { tr: 1.0, vol: 1.0, rsiL: [40, 65], rr: 1.2 },
+  'luźna': { tr: 0.7, vol: 0, rsiL: [38, 70], rr: 1.0 },
+};
+function reversalAt(k, raw, sma10, i, P = REV_VARIANTS['ścisła']) {
   const r = raw[i]; if (!r || !(r.atr > 0)) return null;
   const px = k.c[i], ema50 = px - r.trend * r.atr;
   let side = null;
-  if (r.trend <= -1.5 && r.slope > 0 && px > sma10[i] && r.rsi >= 45 && r.rsi <= 65 && r.volRatio >= 1.05) side = 'L';
-  else if (r.trend >= 1.5 && r.slope < 0 && px < sma10[i] && r.rsi >= 35 && r.rsi <= 55 && r.volRatio >= 1.05) side = 'S';
+  if (r.trend <= -P.tr && r.slope > 0 && px > sma10[i] && r.rsi >= P.rsiL[0] && r.rsi <= P.rsiL[1] && r.volRatio >= P.vol) side = 'L';
+  else if (r.trend >= P.tr && r.slope < 0 && px < sma10[i] && r.rsi >= 100 - P.rsiL[1] && r.rsi <= 100 - P.rsiL[0] && r.volRatio >= P.vol) side = 'S';
   if (!side) return null;
   const stop = Math.max(1.5 * r.atr, px * 0.013), tgt = Math.min(Math.abs(ema50 - px), 4 * stop);
-  if (tgt < 1.5 * stop) return null;
+  if (tgt < P.rr * stop) return null;
   return { side, stop, tgt };
 }
 async function worker() {
@@ -133,16 +138,17 @@ async function worker() {
       if (REV) {
         const f = features(k); const raw = f.raw, n = k.c.length, sma10 = new Array(n).fill(null);
         for (let i = 9; i < n; i++) { let a = 0; for (let j = i - 9; j <= i; j++) a += k.c[j]; sma10[i] = a / 10; }
-        const trades = []; let busy = -1;
+        const trades = [];
+        for (const [vn, P] of Object.entries(REV_VARIANTS)) { let busy = -1;
         for (let i = 60; i < n - H; i++) { // reguła bez uczenia – cała dostępna historia
           if (i <= busy) continue;
-          const sg = reversalAt(k, raw, sma10, i); if (!sg) continue;
+          const sg = reversalAt(k, raw, sma10, i, P); if (!sg) continue;
           const e = k.c[i], L = sg.side === 'L', up = L ? e + sg.tgt : e + sg.stop, dn = L ? e - sg.stop : e - sg.tgt;
           let res = null, j;
           for (j = i + 1; j <= i + H; j++) { const hu = k.h[j] >= up, hd = k.l[j] <= dn; if (hu && hd) { res = -1; break; } if (L ? hu : hd) { res = sg.tgt / sg.stop; break; } if (L ? hd : hu) { res = -1; break; } }
           if (res === null) { j = i + H; res = (L ? k.c[j] - e : e - k.c[j]) / sg.stop; }
-          trades.push({ t: k.t[i], side: sg.side, r: res - 0.002 * e / sg.stop, rr: sg.tgt / sg.stop }); busy = j;
-        }
+          trades.push({ v: vn, t: k.t[i], side: sg.side, r: res - 0.002 * e / sg.stop, rr: sg.tgt / sg.stop }); busy = j;
+        } }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { rev: trades }, pool: null }); continue;
       }
       if (EXITS) {
@@ -324,16 +330,17 @@ async function main() {
 
   if (AUTO) return autoReport(coins, H, t0);
   if (REV) {
-    const all = coins.flatMap(c => (c.recs.rev || []).map(x => ({ ...x, coin: c.coin }))).sort((a, b) => a.t - b.t);
+    const ALL = coins.flatMap(c => (c.recs.rev || []).map(x => ({ ...x, coin: c.coin }))).sort((a, b) => a.t - b.t);
+    for (const vn of Object.keys(REV_VARIANTS)) { const all = ALL.filter(x => x.v === vn);
     const tEnd = all.length ? all[all.length - 1].t : 0;
     const row = (lbl, P) => { const w = P.filter(x => x.r > 0).length, av = P.reduce((a, x) => a + x.r, 0) / (P.length || 1);
       console.log(`${lbl.padEnd(34)} ${String(P.length).padStart(5)} transakcji · na plus ${(w / (P.length || 1) * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R po kosztach`); };
     const days = all.length ? (tEnd - all[0].t) / 864e5 : 0;
-    console.log(`\n=== Odwrócenie trendu (reguła konta F) · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
+    console.log(`\n=== Odwrócenie trendu – wersja ${vn} · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
     row('wszystkie', all); row('LONG', all.filter(x => x.side === 'L')); row('SHORT', all.filter(x => x.side === 'S'));
     const h = all.length >> 1; row('1. połowa okresu', all.slice(0, h)); row('2. połowa okresu', all.slice(h));
     row('ostatnie 3 tygodnie', all.filter(x => x.t >= tEnd - 21 * 864e5));
-    console.log(`średni stosunek cel/stop: ${(all.reduce((a, x) => a + x.rr, 0) / (all.length || 1)).toFixed(2)}`);
+    console.log(`średni stosunek cel/stop: ${(all.reduce((a, x) => a + x.rr, 0) / (all.length || 1)).toFixed(2)}`); }
     console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
   }
   if (EXITS) {
