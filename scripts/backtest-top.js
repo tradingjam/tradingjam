@@ -17,8 +17,9 @@ const MODE = process.env.MODE || 'big';
 const LEVS = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] };
 const AUTO = MODE === 'auto';
 const EXITS = MODE === 'exits';
-const REV = MODE === 'reversal';          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
-const LEV = LEVS[AUTO || EXITS || REV ? 'big' : MODE]; // [cel, stop] w ATR
+const REV = MODE === 'reversal';
+const TREND = MODE === 'trend';            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
+const LEV = LEVS[AUTO || EXITS || REV || TREND ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
 const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
@@ -114,6 +115,30 @@ function reversalAt(k, raw, sma10, i, P = REV_VARIANTS['ścisła']) {
   if (tgt < P.rr * stop) return null;
   return { side, stop, tgt };
 }
+// Strategia trendowa: LONG gdy zamknięcie wybija najwyższy szczyt z N poprzednich świec, cena nad EMA50 i EMA20 rośnie
+// (SHORT lustrzanie). Stop startowy m×ATR (min. 1,3% ceny), potem ciągnięty: najlepsze zamknięcie − m×ATR. Bez stałego celu,
+// maks. 3× horyzont. Wejście po zamknięciu świecy sygnału, w jednej świecy dotknięcie stopu liczone przed nowym szczytem.
+const TREND_VARIANTS = { 'kanał 20, stop 2 ATR': { N: 20, m: 2 }, 'kanał 20, stop 3 ATR': { N: 20, m: 3 }, 'kanał 55, stop 3 ATR': { N: 55, m: 3 } };
+function trendTrades(k, raw, H, P) {
+  const n = k.c.length, out = []; let busy = -1;
+  for (let i = Math.max(60, P.N); i < n - 2; i++) {
+    if (i <= busy) continue; const r = raw[i]; if (!r || !(r.atr > 0)) continue;
+    let hi = -Infinity, lo = Infinity; for (let j = i - P.N; j < i; j++) { if (k.h[j] > hi) hi = k.h[j]; if (k.l[j] < lo) lo = k.l[j]; }
+    let L = null;
+    if (k.c[i] > hi && r.trend > 0 && r.slope > 0) L = true; else if (k.c[i] < lo && r.trend < 0 && r.slope < 0) L = false;
+    if (L === null) continue;
+    const e = k.c[i], d = Math.max(P.m * r.atr, e * 0.013), atr = r.atr;
+    let stop = L ? e - d : e + d, best = e, j, exit = null;
+    for (j = i + 1; j < n && j <= i + 3 * H; j++) {
+      if (L ? k.l[j] <= stop : k.h[j] >= stop) { exit = (L ? Math.min(stop, k.o[j]) : Math.max(stop, k.o[j])); break; }
+      best = L ? Math.max(best, k.c[j]) : Math.min(best, k.c[j]);
+      const ns = L ? best - P.m * atr : best + P.m * atr; if (L ? ns > stop : ns < stop) stop = ns;
+    }
+    if (exit === null) { j = Math.min(j, n - 1); exit = k.c[j]; }
+    out.push({ t: k.t[i], side: L ? 'L' : 'S', r: (L ? exit - e : e - exit) / d - 0.002 * e / d, bars: j - i }); busy = j;
+  }
+  return out;
+}
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina
@@ -135,6 +160,11 @@ async function worker() {
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (TREND) {
+        const f = features(k); const trades = [];
+        for (const [vn, P] of Object.entries(TREND_VARIANTS)) for (const x of trendTrades(k, f.raw, H, P)) trades.push({ ...x, v: vn });
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { rev: trades }, pool: null }); continue;
+      }
       if (REV) {
         const f = features(k); const raw = f.raw, n = k.c.length, sma10 = new Array(n).fill(null);
         for (let i = 9; i < n; i++) { let a = 0; for (let j = i - 9; j <= i; j++) a += k.c[j]; sma10[i] = a / 10; }
@@ -329,18 +359,20 @@ async function main() {
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
-  if (REV) {
+  if (REV || TREND) {
+    const VARS = TREND ? TREND_VARIANTS : REV_VARIANTS;
     const ALL = coins.flatMap(c => (c.recs.rev || []).map(x => ({ ...x, coin: c.coin }))).sort((a, b) => a.t - b.t);
-    for (const vn of Object.keys(REV_VARIANTS)) { const all = ALL.filter(x => x.v === vn);
+    for (const vn of Object.keys(VARS)) { const all = ALL.filter(x => x.v === vn);
     const tEnd = all.length ? all[all.length - 1].t : 0;
     const row = (lbl, P) => { const w = P.filter(x => x.r > 0).length, av = P.reduce((a, x) => a + x.r, 0) / (P.length || 1);
       console.log(`${lbl.padEnd(34)} ${String(P.length).padStart(5)} transakcji · na plus ${(w / (P.length || 1) * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R po kosztach`); };
     const days = all.length ? (tEnd - all[0].t) / 864e5 : 0;
-    console.log(`\n=== Odwrócenie trendu – wersja ${vn} · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
+    console.log(`\n=== ${TREND ? 'Z trendem' : 'Odwrócenie trendu'} – wersja ${vn} · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
     row('wszystkie', all); row('LONG', all.filter(x => x.side === 'L')); row('SHORT', all.filter(x => x.side === 'S'));
     const h = all.length >> 1; row('1. połowa okresu', all.slice(0, h)); row('2. połowa okresu', all.slice(h));
     row('ostatnie 3 tygodnie', all.filter(x => x.t >= tEnd - 21 * 864e5));
-    console.log(`średni stosunek cel/stop: ${(all.reduce((a, x) => a + x.rr, 0) / (all.length || 1)).toFixed(2)}`); }
+    if (TREND) { const R = all.map(x => x.r).sort((a, b) => a - b); console.log(`największa wygrana ${R.length ? R[R.length - 1].toFixed(1) : 0}R · średni czas ${(all.reduce((a, x) => a + x.bars, 0) / (all.length || 1)).toFixed(0)} świec · suma ${R.reduce((a, b) => a + b, 0).toFixed(0)}R`); }
+    else console.log(`średni stosunek cel/stop: ${(all.reduce((a, x) => a + x.rr, 0) / (all.length || 1)).toFixed(2)}`); }
     console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
   }
   if (EXITS) {
