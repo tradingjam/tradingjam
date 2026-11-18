@@ -20,8 +20,9 @@ const EXITS = MODE === 'exits';
 const REV = MODE === 'reversal';
 const TREND = MODE === 'trend';
 const PUMP = MODE === 'pumpfade';
-const PULL = MODE === 'pullback';          // pullback: short na odbiciu do EMA20 w trendzie spadkowym przy słabnącym wolumenie (long lustrzanie)          // pumpfade: short na coinach po dużym wystrzale, które już spadają od szczytu            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
-const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP || PULL ? 'big' : MODE]; // [cel, stop] w ATR
+const PULL = MODE === 'pullback';
+const EACCT = MODE === 'eacct';           // eacct: symulacja całego konta E (24 godz. najlepszy układ + trend dzienny), tylko IV=1h          // pullback: short na odbiciu do EMA20 w trendzie spadkowym przy słabnącym wolumenie (long lustrzanie)          // pumpfade: short na coinach po dużym wystrzale, które już spadają od szczytu            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
+const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP || PULL || EACCT ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
 const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
@@ -200,6 +201,18 @@ function pullTrades(k, raw, H, P) {
   }
   return out;
 }
+// pojedyncza transakcja na świecach 1h dla układu [cel, stop] w ATR; 2:1 z ciągnięciem zysku (jak D/E), max 2× czas
+function tradeSim(k, i, atr, lev, long, H, trail) {
+  const n = k.c.length, e = k.c[i], st = lev[1] * atr, tg = lev[0] * atr; let stop = long ? e - st : e + st;
+  const target = long ? e + tg : e - tg; let best = e, j, R = null; const maxJ = Math.min(n - 1, i + (trail ? 2 * H : H));
+  for (j = i + 1; j <= maxJ; j++) {
+    if (long ? k.l[j] <= stop : k.h[j] >= stop) { R = ((long ? Math.min(stop, k.o[j]) - e : e - Math.max(stop, k.o[j]))) / st; break; }
+    if (!trail && (long ? k.h[j] >= target : k.l[j] <= target)) { R = tg / st; break; }
+    if (trail) { best = long ? Math.max(best, k.h[j]) : Math.min(best, k.l[j]); if (long ? best >= target : best <= target) { const ns = long ? best - st : best + st; if (long ? ns > stop : ns < stop) stop = ns; } }
+  }
+  if (R === null) { j = maxJ; R = (long ? k.c[j] - e : e - k.c[j]) / st; }
+  return { R: R - 0.002 * e / st, bars: j - i, stopFrac: st / e };
+}
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina
@@ -221,6 +234,27 @@ async function worker() {
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (EACCT) {
+        const f = features(k, btcCtx, k4); const raw = f.raw, n = k.c.length; const cand = [];
+        for (const ly of ['big', 'equal', 'safe']) {
+          run(PROD + '|' + ly, f.Z, raw, 0.3, LEVS[ly]);
+          for (const side of ['L', 'S']) for (const r of recs[PROD + '|' + ly][side]) {
+            const rw = raw[r.i]; if (!rw || !(rw.atr > 0)) continue;
+            const tr = tradeSim(k, r.i, rw.atr * SCALE, LEVS[ly], side === 'L', H, ly === 'big');
+            cand.push({ type: '24h', ly, side, t: k.t[r.i] + 36e5, p: r.p, prior: r.prior, rskill: r.rskill, R: tr.R, stopFrac: tr.stopFrac, tEnd: k.t[Math.min(r.i + tr.bars, n - 1)] + 36e5 });
+          }
+          delete recs[PROD + '|' + ly];
+        }
+        try {
+          const kd = await X.getKlines(t.ex, t.sym, '1d', E.HISTORY);
+          if (kd && kd.c.length > 120) {
+            const fd = features(kd);
+            for (const x of trendTrades(kd, fd.raw, 14, { N: 55, m: 3 })) cand.push({ type: 'wybicie', side: x.side, t: x.t + 864e5, tEnd: x.t + (x.bars + 1) * 864e5, R: x.r });
+            for (const x of pullTrades(kd, fd.raw, 14, { exit: 'trail', m: 2 })) cand.push({ type: 'odbicie', side: x.side, t: x.t + 864e5, tEnd: x.t + (x.bars + 1) * 864e5, R: x.r });
+          }
+        } catch (e) { }
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { e: cand }, pool: null }); continue;
+      }
       if (PULL) {
         const f = features(k); const trades = [];
         for (const [vn, P] of Object.entries(PULL_VARIANTS)) for (const x of pullTrades(k, f.raw, H, P)) trades.push({ ...x, v: vn });
@@ -431,6 +465,51 @@ async function main() {
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
+  if (EACCT) {
+    const RW = { big: 2, equal: 1, safe: 0.5 }, BEL = { big: 1 / 3, equal: 0.5, safe: 2 / 3 };
+    const ev = x => { const c = 0.002 / x.stopFrac; return x.p * (RW[x.ly] - c) - (1 - x.p) * (1 + c); };
+    const model = [], daily = [];
+    for (const c of coins) {
+      const best = new Map();
+      for (const x of c.recs.e || []) {
+        if (x.type !== '24h') { daily.push({ ...x, coin: c.coin }); continue; }
+        if (!(x.rskill !== null && x.rskill >= 0.01 && x.p > BEL[x.ly] + 0.02 && x.p - x.prior >= 0.08 && x.stopFrac >= 0.013)) continue;
+        const e = ev(x); if (e < 0.15) continue;
+        const k = x.t + x.side, o = best.get(k);
+        if (!o || e > o.e + 0.03 || (Math.abs(e - o.e) <= 0.03 && x.p > o.p)) best.set(k, { ...x, e, coin: c.coin });
+      }
+      model.push(...best.values());
+    }
+    const sim = (events, from, to, maxOpen, risk) => {
+      const ev2 = events.filter(x => x.t >= from && x.t <= to).sort((a, b) => a.t - b.t || (b.e || 0) - (a.e || 0));
+      let open = [], closed = []; const take = [];
+      for (const x of ev2) {
+        open = open.filter(o => { if (o.tEnd <= x.t) { closed.push(o); return false; } return true; });
+        if (open.length >= maxOpen || open.some(o => o.coin === x.coin)) continue;
+        open.push(x); take.push(x);
+      }
+      closed.push(...open); closed.sort((a, b) => a.tEnd - b.tEnd);
+      let eq = 0, peak = 0, dd = 0; for (const x of closed) { eq += x.R * risk; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq); }
+      const months = (to - from) / (30 * 864e5);
+      return { take, months, perMonth: eq / months, dd };
+    };
+    const show = (lbl, r) => {
+      console.log(`\n--- ${lbl}: ${r.months.toFixed(1)} mies., ${r.take.length} transakcji → ${r.perMonth >= 0 ? '+' : ''}${r.perMonth.toFixed(1)}% mies. (bez procentu składanego), najgłębszy spadek ${r.dd.toFixed(1)}%`);
+      for (const tp of ['24h', 'wybicie', 'odbicie']) { const P = r.take.filter(x => x.type === tp); if (!P.length) continue;
+        const w = P.filter(x => x.R > 0).length, av = P.reduce((a, x) => a + x.R, 0) / P.length;
+        console.log(`   ${tp.padEnd(8)} ${String(P.length).padStart(4)} tr. · na plus ${(w / P.length * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R${tp === '24h' ? ' · układy 2:1/1:1/1:2: ' + ['big', 'equal', 'safe'].map(l => P.filter(x => x.ly === l).length).join('/') : ''}`); }
+    };
+    const mFrom = Math.min(...model.map(x => x.t)), mTo = Math.max(...model.map(x => x.t), mFrom);
+    console.log(`\n=== Konto E – symulacja całości (ryzyko 0,5% na pozycję, maks. 6 pozycji, 1 na coin, po kosztach) ===`);
+    show(`okres testu modelu 24 godz. (${new Date(mFrom).toISOString().slice(0, 10)} – ${new Date(mTo).toISOString().slice(0, 10)}): wszystkie trzy części`, sim([...model, ...daily], mFrom, mTo, 6, 0.5));
+    show('ten sam okres: tylko 24 godz.', sim(model, mFrom, mTo, 6, 0.5));
+    const dFrom = Math.min(...daily.map(x => x.t)), dTo = Math.max(...daily.map(x => x.t));
+    show(`tylko trend dzienny, cała historia (${new Date(dFrom).toISOString().slice(0, 10)} – ${new Date(dTo).toISOString().slice(0, 10)})`, sim(daily, dFrom, dTo, 6, 0.5));
+    const half = (dFrom + dTo) / 2;
+    show('trend dzienny – 1. połowa', sim(daily, dFrom, half, 6, 0.5));
+    show('trend dzienny – 2. połowa', sim(daily, half, dTo, 6, 0.5));
+    console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
+  }
   if (REV || TREND || PUMP || PULL) {
     const VARS = PULL ? PULL_VARIANTS : PUMP ? PUMP_VARIANTS : TREND ? TREND_VARIANTS : REV_VARIANTS;
     const ALL = coins.flatMap(c => (c.recs.rev || []).map(x => ({ ...x, coin: c.coin }))).sort((a, b) => a.t - b.t);
