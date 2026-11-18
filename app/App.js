@@ -796,7 +796,7 @@ function BotScreen({ onBack }) {
       {b.positions.length ? b.positions.map(p => (
         <View key={p.id} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : '3 dni'} · {p.mode === 'equal' ? '1:1' : p.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : p.iv === '1d' ? 'do 42 dni' : '3 dni'} · {p.mode === 'trend' ? 'z trendem' : p.mode === 'equal' ? '1:1' : p.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
             <Text style={s.small}>wejście {fmtPrice(p.entry)} · cel {fmtPrice(p.target)} · stop {fmtPrice(p.stop)}</Text>
             <Text style={s.small}>od {fmtDate(p.openedAt)} · koniec {fmtDate(p.end)} · ryzyko {p.risk.toFixed(2)} USDT</Text>
           </View>
@@ -806,7 +806,7 @@ function BotScreen({ onBack }) {
       {b.closed.length ? b.closed.slice(0, 30).map(c => (
         <View key={c.id + c.closedAt} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
-            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason} · {c.mode === 'equal' ? '1:1' : c.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
+            <Text style={{ color: C.text, fontWeight: '700' }}>{c.base} <Text style={{ color: dirColor(c.side) }}>{c.side}</Text> <Text style={s.meta}>· {c.reason} · {c.mode === 'trend' ? 'z trendem' : c.mode === 'equal' ? '1:1' : c.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
             <Text style={s.small}>{fmtDate(c.openedAt)} → {fmtDate(c.closedAt)}</Text>
           </View>
           <Text style={{ color: c.net >= 0 ? C.up : C.down, fontWeight: '800' }}>{c.net >= 0 ? '+' : ''}{c.net.toFixed(2)} $</Text>

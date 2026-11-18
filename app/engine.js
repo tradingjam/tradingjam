@@ -400,6 +400,22 @@ function withDailyExt(ctx, kd, btcD) {
   return out.t.length ? out : ctx;
 }
 
+// Sygnał „z trendem” na świecach dziennych (backtest 17.11.2026: ok. 75 coinów, 8 lat, 2100 transakcji,
+// +0,12R po kosztach, dodatnio w obu połówkach okresu). Ostatnia ZAMKNIĘTA świeca (n − 2):
+// LONG gdy zamknięcie > najwyższy szczyt z 55 poprzednich świec, cena nad EMA50 i EMA20 rośnie; SHORT lustrzanie.
+// Stop 3×ATR (min. 1,3%), potem ciągnięty: najlepsze dzienne zamknięcie − 3×ATR; bez stałego celu, maks. 42 dni.
+const TREND_SIG = { N: 55, m: 3, maxDays: 42 };
+function trendSignal(k) {
+  const n = k.c.length, i = n - 2; if (i < TREND_SIG.N + 60) return null;
+  const { raw } = buildFeatures(k); const r = raw[i]; if (!r || !(r.atr > 0)) return null;
+  let hi = -Infinity, lo = Infinity; for (let j = i - TREND_SIG.N; j < i; j++) { if (k.h[j] > hi) hi = k.h[j]; if (k.l[j] < lo) lo = k.l[j]; }
+  let side = null;
+  if (k.c[i] > hi && r.trend > 0 && r.slope > 0) side = 'LONG'; else if (k.c[i] < lo && r.trend < 0 && r.slope < 0) side = 'SHORT';
+  if (!side) return null;
+  const px = k.c[i], d = Math.max(TREND_SIG.m * r.atr, px * 0.013);
+  return { side, t: k.t[i], price: px, stopPct: +(d / px * 100).toFixed(3), atr: r.atr };
+}
+
 // ---------- Wynik w zwartej postaci (do JSON i do UI) ----------
 const r4 = x => (x === null || x === undefined || !isFinite(x) ? null : Math.round(x * 1e4) / 1e4);
 const sig = x => (x === null || !isFinite(x) ? null : +x.toPrecision(6));
@@ -667,4 +683,4 @@ const HOW_P = [
   'Wynik jest sprawdzany na danych, których model nie widział przy nauce – tylko wtedy scenariusz może być zielony.',
   'Dlatego procent może czasem kłócić się z tym, co widać na wykresie.',
 ];
-module.exports = { HOW_P, tightStop, MIN_STOP_PCT, withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };
+module.exports = { trendSignal, TREND_SIG, HOW_P, tightStop, MIN_STOP_PCT, withDailyExt, extCtx, evOf, RW_OF, UNPROVEN_IV, dedupeHistory, _internal, historyBreakdown, btcContext, HORIZON_MS, resolvePick, historyStats, rankReason, liftOf, LOW_QV, isIlliquid, REGIME_X, FACTORS, BIG, MODE_BE, MODE_RR, verdict, ALT_CFG, MIN_DAILY, EXTREME_PCT, isExtreme, weakWhy, SAFE, BREAK_EVEN, CATS, catOf, cleanBase, CFG, HISTORY, VALID_N, EDGE_MIN, parseKlines, analyze, reasons, compact, dirOf, rankTop };

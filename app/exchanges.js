@@ -297,6 +297,7 @@ async function analyzeCoin(E, ticker, onProgress, opts = {}) {
         res[iv] = E.compact(E.analyze(k, iv, ext1d && ext1d.t.length > 300 ? ext1d : ctx['1d']));
         if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv, ctx['1d']));
         if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv));
+        try { const ts = E.trendSignal(k); if (ts && res[iv] && !res[iv].error) res[iv].trendSig = ts; } catch (e) { }
       } else if (ctx && iv === '4h') {
         res[iv] = E.compact(E.analyze(k, iv, ctx['4h']));
         if (res[iv].error) res[iv] = E.compact(E.analyze(k, iv));

@@ -183,3 +183,15 @@ test('tryb obserwacji: spadek equity od szczytu albo seria złych wyników', () 
   const ok = Array.from({ length: 30 }, (_, i) => ({ r: i % 2 ? 2 : -1 }));
   assert.strictEqual(B.observeCheck({ peakEquity: 1000, closed: ok }, 1000), null);
 });
+
+test('strategia z trendem: stop ciągnięty tylko na zamknięciach dnia, bez celu', () => {
+  const D = 864e5, d0 = Date.UTC(2026, 10, 10);
+  const p = { side: 'LONG', entry: 100, stop: 90, target: 1e8, qty: 1, openedAt: d0 + 3600e3, end: d0 + 42 * D, checkedTo: d0 + 3600e3, trail: true, chandelier: true, rDist: 10, best: 100 };
+  const day = (i, o, h, l, c) => ({ t: d0 + i * D, dur: D, o, h, l, c });
+  // dzień 0 = świeca wejścia; dzień 1: szczyt 130, zamknięcie 120 → stop 110 (od następnego dnia)
+  let r = B.settle(p, [day(0, 100, 101, 99, 100), day(1, 100, 130, 95, 120)], d0 + 3 * D);
+  assert.strictEqual(r.done, null);
+  assert.strictEqual(p.stop, 110);
+  r = B.settle(p, [day(2, 118, 119, 109, 112)], d0 + 4 * D);
+  assert.deepStrictEqual(r.done.slice(0, 2), [110, 'ciągnięty stop']);
+});

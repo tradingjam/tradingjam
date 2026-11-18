@@ -39,13 +39,13 @@ const ACCOUNTS = {
   B: { name: 'Częste trafienia 1:1', desc: 'Zielone scenariusze w układzie 1:1, tylko gdy model daje co najmniej 55%.' },
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
-  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Połowa ryzyka (0,5% na pozycję), maks. 4 pozycje.', riskPct: 0.005, maxOpen: 4 },
+  E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych (wybicie 55 dni, ciągnięty stop, do 42 dni). Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji.', riskPct: 0.005, maxOpen: 6 },
 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
 const RESET_NOTE = 'Nowe zasady od 17.11.2026: rozliczanie na świecach 5-min (każda raz), przewaga ≥ 8 pkt, tylko 24 godz., limit ryzyka 5%, bez powtórek po stopie.';
 const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, '..', 'out');
-const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5 };
+const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5, '1d': 42 * 864e5 };
 const M5 = 5 * 6e4, H1 = 36e5;
 
 // ---------- stan: odczyt i zapis ----------
@@ -127,7 +127,14 @@ function settle(p, bars, now) {
       if (hitT) { done = [p.target, 'cel', bEnd, null]; p.checkedTo = bEnd; break; }
     }
     // 3) ciągnięty stop: nowy poziom obowiązuje od następnej świecy
-    if (p.trail && !entryBar) {
+    if (p.chandelier && !entryBar) {
+      // tylko na zamknięciu dnia (UTC): najlepsze zamknięcie − rDist, jak w teście na historii
+      if ((b.t + b.dur) % 864e5 === 0) {
+        p.best = L ? Math.max(p.best || p.entry, b.c) : Math.min(p.best || p.entry, b.c);
+        const ns = L ? p.best - p.rDist : p.best + p.rDist;
+        if (L ? ns > p.stop : ns < p.stop) { p.stop = ns; p.trailing = true; }
+      }
+    } else if (p.trail && !entryBar) {
       p.best = L ? Math.max(p.best || p.entry, b.h) : Math.min(p.best || p.entry, b.l);
       if (L ? p.best >= p.target : p.best <= p.target) {
         const ns = L ? p.best - p.rDist : p.best + p.rDist;
@@ -165,6 +172,13 @@ function candidates(key, res) {
     if (key === 'A') big.forEach(r => out.push(mk(r, 'big')));
     if (key === 'D') big.forEach(r => { const c = mk(r, 'big'); if (c.stopPct >= 1.3) out.push(c); });
     if (key === 'B') eq.forEach(r => out.push(mk(r, 'equal')));
+    if (key === 'E' && iv === BASE.horizons[0]) {
+      // E dodatkowo: sygnały „z trendem” ze świec dziennych (wybicie 55 dni, ciągnięty stop 3×ATR, bez stałego celu)
+      for (const coin of res.coins) {
+        const ts = coin.res && coin.res['1d'] && coin.res['1d'].trendSig; if (!ts) continue;
+        out.push({ coin, iv: '1d', side: ts.side, p: 0, mode: 'trend', lift: 0, movePct: 0, stopPct: ts.stopPct, ev: 0.12, signalPrice: ts.price, tickerPrice: coin.price, trendSig: ts });
+      }
+    }
     if (key === 'E') {
       // idealna okazja dla każdego coina: spośród układów 2:1 / 1:1 / 1:2, które zdały test, ten z najwyższym
       // oczekiwanym wynikiem po kosztach (szansa × wielkość wygranej − strata); przy remisie (±0,03R) wyższa szansa.
@@ -206,7 +220,8 @@ function rejectEntry(c, live, now, resAgeMs) {
   if (live.bid > 0 && live.ask > 0 && (live.ask - live.bid) / 2 / live.price > BASE.slipPct) return 'za szeroki spread';
   if (c.side !== 'LONG' && c.side !== 'SHORT') return 'zły kierunek';
   const stp = c.stopPct / 100, tgt = c.movePct / 100;
-  if (!(stp > 0.001 && stp < 0.5) || !(tgt > 0 && tgt < 1)) return 'zły cel/stop';
+  if (!(stp > 0.001 && stp < 0.5) || (c.mode !== 'trend' && !(tgt > 0 && tgt < 1))) return 'zły cel/stop';
+  if (c.mode === 'trend' && c.trendSig && now - c.trendSig.t > 2 * 864e5) return 'stary sygnał trendu';
   // cena uciekła od chwili sygnału o więcej niż połowę odległości stopu → scenariusz nieaktualny
   const ref = c.tickerPrice > 0 ? c.tickerPrice : c.signalPrice;
   if (ref > 0 && Math.abs(live.price / ref - 1) > stp * 0.5) return 'cena uciekła od sygnału';
@@ -254,11 +269,12 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       const why = rejectEntry(c, live, now, resAge); if (why) { skip(why); continue; }
       if (st.positions.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base))) { skip('już otwarta pozycja na coinie'); continue; }
       // ten sam coin w tym samym kierunku dopiero po upływie horyzontu poprzedniej pozycji (jak w teście na historii)
-      if (st.closed.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base) && p.side === c.side && p.openedAt + H_MS[p.iv] > now)) { skip('przerwa po poprzedniej pozycji'); continue; }
+      if (st.closed.some(p => E.cleanBase(p.base) === E.cleanBase(c.coin.base) && p.side === c.side && (p.mode === 'trend' ? (p.closedAt || 0) + 864e5 : p.openedAt + H_MS[p.iv]) > now)) { skip('przerwa po poprzedniej pozycji'); continue; }
       const tgt = c.movePct / 100, stp = c.stopPct / 100;
       // ciągnięcie zysku: konto D zawsze; konto E tylko w układzie 2:1 – tylko tam sprawdziliśmy je w teście na historii
       // (24 godz.: +0,15R → +0,42R na transakcję); przy 1:1 i 1:2 E zamyka na celu
       const trail = key === 'D' || (key === 'E' && c.mode === 'big');
+      const chand = c.mode === 'trend'; // stop ciągnięty od wejścia, aktualizowany tylko na zamknięciach dnia
       const entry = fill(live.price, c.side, true);
       const eqNow = st.balance + unrealized(st, byBase);
       // wielkość pozycji: 1% equity na stratę przy stopie WRAZ z kosztami wejścia i wyjścia
@@ -272,16 +288,17 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       if (room <= eqNow * 0.05) { skip('limit dźwigni'); break; }
       if (qty * entry > room) qty = room / entry;
       const pos = {
-        id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + H_MS[c.iv] * (trail ? 2 : 1),
-        entry, qty, target: c.side === 'LONG' ? entry * (1 + tgt) : entry * (1 - tgt), stop: c.side === 'LONG' ? entry * (1 - stp) : entry * (1 + stp),
+        id: `${now}-${live.sym}`, base: c.coin.base, sym: live.sym, side: c.side, iv: c.iv, mode: c.mode, openedAt: now, end: now + (chand ? H_MS['1d'] : H_MS[c.iv] * (trail ? 2 : 1)),
+        entry, qty, target: chand ? (c.side === 'LONG' ? entry * 1e6 : entry * 1e-6) : c.side === 'LONG' ? entry * (1 + tgt) : entry * (1 - tgt), stop: c.side === 'LONG' ? entry * (1 - stp) : entry * (1 + stp),
         p: +c.p.toFixed(3), ev: +c.ev.toFixed(2), lift: +c.lift.toFixed(3), costR: +(costPerUnit(entry) / (entry * stp)).toFixed(3), checkedTo: now, method: BASE.method,
         ...(live.bid > 0 ? { spreadPct: +((live.ask - live.bid) / live.price * 100).toFixed(3) } : { spreadPct: null }),
         ...(trail ? { trail: true, rDist: entry * stp, best: entry } : {}),
+        ...(chand ? { trail: true, chandelier: true, rDist: entry * stp, best: entry } : {}),
       };
       pos.risk = openRisk(pos);
       if (!(pos.qty > 0) || !isFinite(pos.qty) || (pos.side === 'LONG' ? !(pos.stop < pos.entry && pos.entry < pos.target) : !(pos.target < pos.entry && pos.entry < pos.stop))) continue;
       st.positions.push(pos);
-      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : '3 dni'}, ${c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
+      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : c.iv === '1d' ? 'do 42 dni' : '3 dni'}, ${c.mode === 'trend' ? 'z trendem, dzienne' : c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
       opened++;
     }
   }
