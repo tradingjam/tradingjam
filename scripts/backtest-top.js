@@ -18,8 +18,9 @@ const LEVS = { big: [2, 1], equal: [2, 2], equal15: [1.5, 1.5], safe: [1, 2] };
 const AUTO = MODE === 'auto';
 const EXITS = MODE === 'exits';
 const REV = MODE === 'reversal';
-const TREND = MODE === 'trend';            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
-const LEV = LEVS[AUTO || EXITS || REV || TREND ? 'big' : MODE]; // [cel, stop] w ATR
+const TREND = MODE === 'trend';
+const PUMP = MODE === 'pumpfade';          // pumpfade: short na coinach po dużym wystrzale, które już spadają od szczytu            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
+const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
 const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
@@ -139,6 +140,30 @@ function trendTrades(k, raw, H, P) {
   }
   return out;
 }
+// Short po wystrzale („pump and dump”): w oknie W świec szczyt ≥ X× dołka sprzed szczytu, cena spadła już ≥ Y od szczytu,
+// ale jest wciąż ≥ 30% nad dołkiem; cena pod EMA20, EMA20 spada, zamknięcie pod SMA10. Stop m×ATR (min. 1,3%),
+// potem ciągnięty od najlepszego zamknięcia; bez stałego celu, maks. 3× horyzont. Jedna pozycja na coin naraz.
+const PUMP_VARIANTS = { 'wystrzał ≥ 2×, spadek ≥ 30%': { X: 2, Y: 0.3, m: 2.5 }, 'wystrzał ≥ 3×, spadek ≥ 40%': { X: 3, Y: 0.4, m: 2.5 }, 'wystrzał ≥ 2×, spadek ≥ 30%, stop 4 ATR': { X: 2, Y: 0.3, m: 4 } };
+function pumpTrades(k, raw, H, P, W) {
+  const n = k.c.length, out = []; let busy = -1; const sma10 = new Array(n).fill(null);
+  for (let i = 9; i < n; i++) { let a = 0; for (let j = i - 9; j <= i; j++) a += k.c[j]; sma10[i] = a / 10; }
+  for (let i = W + 20; i < n - 2; i++) {
+    if (i <= busy) continue; const r = raw[i]; if (!r || !(r.atr > 0)) continue;
+    let pk = -Infinity, pkI = -1; for (let j = i - W; j < i; j++) if (k.h[j] > pk) { pk = k.h[j]; pkI = j; }
+    let lo = Infinity; for (let j = Math.max(0, pkI - W); j < pkI; j++) if (k.l[j] < lo) lo = k.l[j];
+    const px = k.c[i];
+    if (!(pk / lo >= P.X && px <= pk * (1 - P.Y) && px >= lo * 1.3 && r.slope < 0 && px < sma10[i] && r.trend < 0)) continue;
+    const d = Math.max(P.m * r.atr, px * 0.013), atr = r.atr;
+    let stop = px + d, best = px, j, exit = null;
+    for (j = i + 1; j < n && j <= i + 3 * H; j++) {
+      if (k.h[j] >= stop) { exit = Math.max(stop, k.o[j]); break; }
+      best = Math.min(best, k.c[j]); const ns = best + P.m * atr; if (ns < stop) stop = ns;
+    }
+    if (exit === null) { j = Math.min(j, n - 1); exit = k.c[j]; }
+    out.push({ t: k.t[i], side: 'S', r: (px - exit) / d - 0.002 * px / d, bars: j - i }); busy = j;
+  }
+  return out;
+}
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina
@@ -160,6 +185,11 @@ async function worker() {
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (PUMP) {
+        const f = features(k); const trades = []; const W = BARS === '1d' ? 60 : IV === '4h' ? 180 : 360;
+        for (const [vn, P] of Object.entries(PUMP_VARIANTS)) for (const x of pumpTrades(k, f.raw, H, P, W)) trades.push({ ...x, v: vn });
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { rev: trades }, pool: null }); continue;
+      }
       if (TREND) {
         const f = features(k); const trades = [];
         for (const [vn, P] of Object.entries(TREND_VARIANTS)) for (const x of trendTrades(k, f.raw, H, P)) trades.push({ ...x, v: vn });
@@ -359,19 +389,19 @@ async function main() {
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
-  if (REV || TREND) {
-    const VARS = TREND ? TREND_VARIANTS : REV_VARIANTS;
+  if (REV || TREND || PUMP) {
+    const VARS = PUMP ? PUMP_VARIANTS : TREND ? TREND_VARIANTS : REV_VARIANTS;
     const ALL = coins.flatMap(c => (c.recs.rev || []).map(x => ({ ...x, coin: c.coin }))).sort((a, b) => a.t - b.t);
     for (const vn of Object.keys(VARS)) { const all = ALL.filter(x => x.v === vn);
     const tEnd = all.length ? all[all.length - 1].t : 0;
     const row = (lbl, P) => { const w = P.filter(x => x.r > 0).length, av = P.reduce((a, x) => a + x.r, 0) / (P.length || 1);
       console.log(`${lbl.padEnd(34)} ${String(P.length).padStart(5)} transakcji · na plus ${(w / (P.length || 1) * 100).toFixed(0)}% · średnio ${av >= 0 ? '+' : ''}${av.toFixed(2)}R po kosztach`); };
     const days = all.length ? (tEnd - all[0].t) / 864e5 : 0;
-    console.log(`\n=== ${TREND ? 'Z trendem' : 'Odwrócenie trendu'} – wersja ${vn} · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
+    console.log(`\n=== ${PUMP ? 'Short po wystrzale' : TREND ? 'Z trendem' : 'Odwrócenie trendu'} – wersja ${vn} · ${coins.length} coinów · ok. ${days.toFixed(0)} dni ===`);
     row('wszystkie', all); row('LONG', all.filter(x => x.side === 'L')); row('SHORT', all.filter(x => x.side === 'S'));
     const h = all.length >> 1; row('1. połowa okresu', all.slice(0, h)); row('2. połowa okresu', all.slice(h));
     row('ostatnie 3 tygodnie', all.filter(x => x.t >= tEnd - 21 * 864e5));
-    if (TREND) { const R = all.map(x => x.r).sort((a, b) => a - b); console.log(`największa wygrana ${R.length ? R[R.length - 1].toFixed(1) : 0}R · średni czas ${(all.reduce((a, x) => a + x.bars, 0) / (all.length || 1)).toFixed(0)} świec · suma ${R.reduce((a, b) => a + b, 0).toFixed(0)}R`); }
+    if (TREND || PUMP) { const R = all.map(x => x.r).sort((a, b) => a - b); console.log(`największa wygrana ${R.length ? R[R.length - 1].toFixed(1) : 0}R · średni czas ${(all.reduce((a, x) => a + x.bars, 0) / (all.length || 1)).toFixed(0)} świec · suma ${R.reduce((a, b) => a + b, 0).toFixed(0)}R`); }
     else console.log(`średni stosunek cel/stop: ${(all.reduce((a, x) => a + x.rr, 0) / (all.length || 1)).toFixed(2)}`); }
     console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
   }
