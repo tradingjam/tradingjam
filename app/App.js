@@ -797,7 +797,7 @@ function BotScreen({ onBack }) {
         <View key={p.id} style={s.row}>
           <View style={{ flex: 1, minWidth: 0, marginRight: 10 }}>
             <Text style={{ color: C.text, fontWeight: '700' }}>{p.base} <Text style={{ color: dirColor(p.side) }}>{p.side}</Text> <Text style={s.meta}>· {p.iv === '1h' ? '24 godz.' : p.iv === '1d' ? 'do 42 dni' : '3 dni'} · {p.mode === 'trend' ? 'z trendem' : p.mode === 'equal' ? '1:1' : p.mode === 'safe' ? '1:2' : '2:1'}</Text></Text>
-            <Text style={s.small}>wejście {fmtPrice(p.entry)} · cel {fmtPrice(p.target)} · stop {fmtPrice(p.stop)}</Text>
+            <Text style={s.small}>wejście {fmtPrice(p.entry)} · {p.chandelier ? 'bez stałego celu (stop idzie za ceną)' : `cel ${fmtPrice(p.target)}`} · stop {fmtPrice(p.stop)}{p.chandelier && p.setup ? ` · ${p.setup}` : ''}</Text>
             <Text style={s.small}>od {fmtDate(p.openedAt)} · koniec {fmtDate(p.end)} · ryzyko {p.risk.toFixed(2)} USDT</Text>
           </View>
         </View>
