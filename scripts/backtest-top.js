@@ -20,7 +20,7 @@ const EXITS = MODE === 'exits';
 const REV = MODE === 'reversal';
 const TREND = MODE === 'trend';
 const PUMP = MODE === 'pumpfade';
-const PULL = MODE === 'pullback';
+const PULL = MODE === 'pullback' || MODE === 'pullbacklimit';
 const EACCT = MODE === 'eacct';           // eacct: symulacja całego konta E (24 godz. najlepszy układ + trend dzienny), tylko IV=1h          // pullback: short na odbiciu do EMA20 w trendzie spadkowym przy słabnącym wolumenie (long lustrzanie)          // pumpfade: short na coinach po dużym wystrzale, które już spadają od szczytu            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
 const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP || PULL || EACCT ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
@@ -178,27 +178,50 @@ function pumpTrades(k, raw, H, P, W, btcAt) {
 // Granie w kierunku trendu na odbiciach: trend spadkowy (cena ≥ 1 ATR pod EMA50, EMA20 spada), cena podeszła pod EMA20
 // (szczyt świecy ≥ EMA20), ale zamknęła się pod nią; wolumen poniżej średniej (odbicie bez siły), RSI 40–60.
 // SHORT, stop nad szczytem świecy + 0,5 ATR (min. 1,3%). Wyjście: cel 2R albo ciągnięty stop (warianty). Long lustrzanie.
-const PULL_VARIANTS = { 'cel 2R': { exit: 'tp', tp: 2 }, 'cel 1,5R': { exit: 'tp', tp: 1.5 }, 'ciągnięty stop 2 ATR': { exit: 'trail', m: 2 } };
+const PULL_VARIANTS = MODE === 'pullbacklimit' ? {
+  'wejście po rynku (jak teraz)': { exit: 'trail', m: 2 },
+  'limit na EMA20, 1 dzień': { exit: 'trail', m: 2, entry: 'ema20', wait: 1 },
+  'limit na EMA20, 3 dni': { exit: 'trail', m: 2, entry: 'ema20', wait: 3 },
+  'limit cena ± 0,5 ATR, 2 dni': { exit: 'trail', m: 2, entry: 'atr', wait: 2 },
+  'limit na SMA30, 3 dni': { exit: 'trail', m: 2, entry: 'sma30', wait: 3 },
+} : { 'cel 2R': { exit: 'tp', tp: 2 }, 'cel 1,5R': { exit: 'tp', tp: 1.5 }, 'ciągnięty stop 2 ATR': { exit: 'trail', m: 2 } };
 function pullTrades(k, raw, H, P) {
   const n = k.c.length, out = []; let busy = -1; const ema = new Array(n).fill(null); const a = 2 / 21; let e = k.c[0];
   for (let i = 0; i < n; i++) { e = i ? a * k.c[i] + (1 - a) * e : e; ema[i] = e; }
+  const sma30 = new Array(n).fill(null); for (let i = 29; i < n; i++) { let q = 0; for (let j = i - 29; j <= i; j++) q += k.c[j]; sma30[i] = q / 30; }
+  let signals = 0, filled = 0;
   for (let i = 60; i < n - 2; i++) {
     if (i <= busy) continue; const r = raw[i]; if (!r || !(r.atr > 0)) continue;
     let L = null;
     if (r.trend <= -1 && r.slope < 0 && k.h[i] >= ema[i] && k.c[i] < ema[i] && r.volRatio < 1 && r.rsi >= 40 && r.rsi <= 60) L = false;
     else if (r.trend >= 1 && r.slope > 0 && k.l[i] <= ema[i] && k.c[i] > ema[i] && r.volRatio < 1 && r.rsi >= 40 && r.rsi <= 60) L = true;
     if (L === null) continue;
-    const px = k.c[i], d = Math.max(L ? px - k.l[i] + 0.5 * r.atr : k.h[i] - px + 0.5 * r.atr, px * 0.013), atr = r.atr;
-    let stop = L ? px - d : px + d, best = px, j, exit = null; const tgt = P.exit === 'tp' ? (L ? px + P.tp * d : px - P.tp * d) : null;
-    for (j = i + 1; j < n && j <= i + (P.exit === 'tp' ? H : 3 * H); j++) {
+    signals++;
+    const atr = r.atr, d0 = Math.max(L ? k.c[i] - k.l[i] + 0.5 * atr : k.h[i] - k.c[i] + 0.5 * atr, k.c[i] * 0.013);
+    const stop0 = L ? k.c[i] - d0 : k.c[i] + d0;
+    let px = k.c[i], i0 = i, cost = 0.002;
+    if (P.entry) {
+      // zlecenie z limitem po lepszej cenie (short: wyżej, long: niżej), ważne P.wait dni; prowizja maker przy wejściu
+      const lim0 = P.entry === 'ema20' ? ema[i] : P.entry === 'sma30' ? sma30[i] : (L ? k.c[i] - 0.5 * atr : k.c[i] + 0.5 * atr);
+      const lim = L ? Math.min(lim0, k.c[i]) : Math.max(lim0, k.c[i]);
+      if (!(L ? lim > stop0 * 1.002 : lim < stop0 * 0.998)) continue; // limit za stopem – bez sensu
+      let fj = -1; for (let j = i + 1; j <= i + P.wait && j < n; j++) { if (L ? k.l[j] <= lim : k.h[j] >= lim) { fj = j; break; } if (L ? k.l[j] <= stop0 : k.h[j] >= stop0) break; }
+      if (fj < 0) continue;
+      px = lim; i0 = fj; cost = 0.0012; filled++;
+      if (L ? k.l[fj] <= stop0 : k.h[fj] >= stop0) { out.push({ t: k.t[i], side: L ? 'L' : 'S', r: -1 - cost * px / Math.abs(px - stop0), bars: 0 }); busy = fj; continue; }
+    }
+    const d = Math.abs(px - stop0); if (d < px * 0.004) continue;
+    let stop = stop0, best = px, j, exit = null; const tgt = P.exit === 'tp' ? (L ? px + P.tp * d : px - P.tp * d) : null;
+    for (j = i0 + 1; j < n && j <= i0 + (P.exit === 'tp' ? H : 3 * H); j++) {
       const hs = L ? k.l[j] <= stop : k.h[j] >= stop;
       if (hs) { exit = L ? Math.min(stop, k.o[j]) : Math.max(stop, k.o[j]); break; }
       if (tgt !== null && (L ? k.h[j] >= tgt : k.l[j] <= tgt)) { exit = tgt; break; }
       if (P.exit === 'trail') { best = L ? Math.max(best, k.c[j]) : Math.min(best, k.c[j]); const ns = L ? best - P.m * atr : best + P.m * atr; if (L ? ns > stop : ns < stop) stop = ns; }
     }
     if (exit === null) { j = Math.min(j, n - 1); exit = k.c[j]; }
-    out.push({ t: k.t[i], side: L ? 'L' : 'S', r: (L ? exit - px : px - exit) / d - 0.002 * px / d, bars: j - i }); busy = j;
+    out.push({ t: k.t[i], side: L ? 'L' : 'S', r: (L ? exit - px : px - exit) / d - cost * px / d, bars: j - i }); busy = j;
   }
+  out.signals = signals; out.filled = filled;
   return out;
 }
 // pojedyncza transakcja na świecach 1h dla układu [cel, stop] w ATR; 2:1 z ciągnięciem zysku (jak D/E), max 2× czas
