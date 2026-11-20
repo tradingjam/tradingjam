@@ -195,3 +195,41 @@ test('strategia z trendem: stop ciągnięty tylko na zamknięciach dnia, bez cel
   r = B.settle(p, [day(2, 118, 119, 109, 112)], d0 + 4 * D);
   assert.deepStrictEqual(r.done.slice(0, 2), [110, 'ciągnięty stop']);
 });
+
+// ---------- konto F: kopia aplikacji ----------
+test('konto F: zlecenie z limitem po cenie z aplikacji → wykonanie → cel z aplikacji', async () => {
+  const now = Date.UTC(2026, 10, 20, 10, 5);
+  const hist = [{ id: 'x1', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', base: 'AAA', dir: 'LONG', price: 100, target: 104, stop: 98, p: 0.4, lift: 0.1 },
+    { id: 'x2', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', base: 'BBB', dir: 'SHORT', price: 50, target: 48, stop: 51, p: 0.4, lift: 0.09 }];
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['AAA', { price: 100.1, qv: 1e7, sym: 'AAA-USDT' }], ['BBB', { price: 49.8, qv: 1e7, sym: 'BBB-USDT' }]]); // BBB uciekło o 0,4%
+  const r1 = { ...res, generatedAt: new Date(now).toISOString(), history: hist };
+  await B.runAccount('F', st, r1, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 0);
+  assert.strictEqual(st.pending.length, 1);
+  assert.strictEqual(st.pending[0].limit, 100);
+  assert.strictEqual(st.lastScan.rejected['cena uciekła o ponad 0,2%'], 1);
+  // godzinę później: świeca 5m po złożeniu zlecenia schodzi do 99,9 → wykonanie po 100, potem cel 104
+  const bars = [bar(now - 6e4, 100.1, 100.2, 99.0, 100, M5), // świeca, w której złożono zlecenie – nie liczy się
+    { t: now + 10 * 6e4, dur: M5, o: 100.1, h: 100.3, l: 99.9, c: 100.2 }, { t: now + 30 * 6e4, dur: M5, o: 101, h: 104.5, l: 100.8, c: 104 }];
+  await B.runAccount('F', st, { ...r1, history: hist }, byBase, async () => bars, now + H);
+  assert.strictEqual(st.pending.length, 0);
+  assert.strictEqual(st.closed.length, 1);
+  assert.strictEqual(st.closed[0].entry, 100);
+  assert.strictEqual(st.closed[0].reason, 'cel');
+  assert.ok(st.closed[0].r > 1.6 && st.closed[0].r < 2, 'R ' + st.closed[0].r);
+  // ten sam scenariusz nie jest brany drugi raz
+  await B.runAccount('F', st, { ...r1, history: hist }, byBase, async () => [], now + 2 * H);
+  assert.strictEqual(st.pending.length + st.positions.length, 0);
+});
+
+test('konto F: zlecenie z limitem wygasa, gdy cena nie wróci', async () => {
+  const now = Date.UTC(2026, 10, 20, 10, 5);
+  const o = { id: 'o', base: 'AAA', sym: 'AAA-USDT', side: 'LONG', iv: '1h', limit: 100, target: 104, stop: 98, end: now + 24 * H, placedAt: now, expires: now + H };
+  const st = mkAcct({ pending: [o], lastPickT: now, day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['AAA', { price: 101, qv: 1e7, sym: 'AAA-USDT' }]]);
+  await B.runAccount('F', st, { ...res, generatedAt: new Date(now).toISOString(), history: [] }, byBase, async () => [{ t: now + 6e5, dur: M5, o: 100.5, h: 101, l: 100.2, c: 101 }], now + H + 6e4);
+  assert.strictEqual(st.pending.length, 0);
+  assert.strictEqual(st.positions.length, 0);
+  assert.ok(st.log[0].includes('wygasło'));
+});

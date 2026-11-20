@@ -1,4 +1,4 @@
-// Bot „na sucho” (paper trading) – cztery WIRTUALNE konta po 1000 USDT, prawdziwe ceny BingX.
+// Bot „na sucho” (paper trading) – sześć WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
 // Co godzinę, po skanie: rozlicza pozycje (cel / stop / koniec czasu) i otwiera nowe.
 // Konta różnią się tylko sposobem wyboru scenariuszy – żeby na żywo sprawdzić, co najlepiej mnoży kapitał:
 //   A „Duży zysk 2:1”        – zielone scenariusze w układzie 2:1
@@ -7,6 +7,10 @@
 //   D „Ciągnięcie zysku”     – jak A, ale po dojściu do celu nie zamyka, tylko ciągnie stop za ceną (1R za szczytem), max 2× czas
 //   E „Najlepsze z najlepszych” – idealna okazja: układ 2:1 / 1:1 / 1:2 z najwyższym oczekiwanym wynikiem po kosztach (≥ 0,15R),
 //                                przy remisie wyższa szansa; ryzyko 0,5% na pozycję, maks. 4 pozycje
+//   F „Kopia aplikacji”      – dokładnie te zielone scenariusze, które aplikacja zapisuje w historii (24 godz., 3 dni, 14 dni),
+//                                nic więcej; wejście zleceniem z limitem po cenie z aplikacji (ważne 1 godz.), cel i stop
+//                                z aplikacji; pomija scenariusz, gdy cena uciekła o ponad 0,2%. Mierzy, ile z wyniku aplikacji
+//                                zostaje po kosztach na prawdziwych cenach.
 //
 // ZASADY ROZLICZANIA (metoda 2, od 16.11.2026) – stosowane do nowych pozycji i dalszej części już otwartych:
 // • tylko ZAMKNIĘTE świece; każda świeca przetwarzana dokładnie raz (p.checkedTo = koniec ostatniej przetworzonej),
@@ -40,12 +44,16 @@ const ACCOUNTS = {
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
+  F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz., 3 dni i 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Jeśli cena uciekła o ponad 0,2%, scenariusz jest pomijany. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 0,5% na pozycję, maks. 12 pozycji.', riskPct: 0.005, maxOpen: 12, maxOpenRisk: 0.06, copy: true },
 };
+// konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
+const COPY = { maxSlip: 0.002, limitMs: 36e5 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
 const RESET_NOTE = 'Nowe zasady od 17.11.2026: rozliczanie na świecach 5-min (każda raz), przewaga ≥ 8 pkt, tylko 24 godz., limit ryzyka 5%, bez powtórek po stopie.';
 const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, '..', 'out');
 const H_MS = { '1h': 24 * 36e5, '4h': 72 * 36e5, '1d': 42 * 864e5 };
+const IV_LABEL = { '1h': '24 godz.', '4h': '3 dni', '1d': '14 dni' };
 const M5 = 5 * 6e4, H1 = 36e5;
 
 // ---------- stan: odczyt i zapis ----------
@@ -228,12 +236,101 @@ function rejectEntry(c, live, now, resAgeMs) {
   return null;
 }
 
+// ---------- konto F: kopia aplikacji ----------
+// nowe zielone scenariusze z historii aplikacji (zapisane po ostatnim uruchomieniu konta)
+function copyCandidates(st, hist, now) {
+  const since = st.lastPickT || now - 30 * 6e4;
+  return (hist || []).filter(p => p.method === 2 && p.status === 'open' && p.t > since && p.t <= now && p.end > now
+    && p.price > 0 && p.target > 0 && p.stop > 0 && (p.dir === 'LONG' || p.dir === 'SHORT'))
+    .sort((a, b) => (b.lift || 0) - (a.lift || 0));
+}
+// zlecenie z limitem: pierwsza ZAMKNIĘTA świeca, która zaczęła się po złożeniu zlecenia i dotknęła limitu.
+// Świecy, w której złożono zlecenie, nie liczymy (nie wiemy, czy dołek był przed, czy po). Otwarcie świecy
+// już po lepszej stronie limitu → wykonanie po cenie otwarcia (tak działa zlecenie z limitem).
+function limitFill(o, bars, now) {
+  const L = o.side === 'LONG';
+  for (const b of bars) {
+    if (b.t < o.placedAt) continue;
+    if (b.t >= o.expires || b.t + b.dur > now) break;
+    if (L ? b.l <= o.limit : b.h >= o.limit) return { t: b.t + 1, px: (L ? b.o < o.limit : b.o > o.limit) ? b.o : o.limit };
+  }
+  return null;
+}
+// otwarcie pozycji F (cel i stop z aplikacji, wielkość wg ryzyka konta) – zwraca pozycję albo powód odrzucenia
+function copyOpen(st, o, entry, t, byBase, key) {
+  const A = ACCOUNTS[key], riskPct = A.riskPct || BASE.riskPct, L = o.side === 'LONG';
+  if (L ? !(o.stop < entry && entry < o.target) : !(o.target < entry && entry < o.stop)) return 'cena poza celem/stopem';
+  const dist = Math.abs(entry - o.stop), eqNow = st.balance + unrealized(st, byBase);
+  let qty = eqNow * riskPct / (dist + costPerUnit(entry));
+  const riskRoom = eqNow * (A.maxOpenRisk || BASE.maxOpenRisk) - st.positions.reduce((a, p) => a + openRisk(p), 0);
+  if (riskRoom <= eqNow * riskPct * 0.3) return 'limit łącznego ryzyka';
+  qty = Math.min(qty, riskRoom / (dist + costPerUnit(entry)));
+  const room = eqNow * BASE.maxLeverage - st.positions.reduce((a, p) => a + p.entry * p.qty, 0);
+  if (room <= eqNow * 0.05) return 'limit dźwigni';
+  if (qty * entry > room) qty = room / entry;
+  if (!(qty > 0) || !isFinite(qty)) return 'zła wielkość pozycji';
+  const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: 'copy', openedAt: t, end: o.end,
+    entry, qty, target: o.target, stop: o.stop, p: o.p || 0, ev: 0, lift: o.lift || 0, costR: +(costPerUnit(entry) / dist).toFixed(3),
+    checkedTo: t, method: BASE.method, appPrice: o.limit, pickId: o.pickId, fillType: o.fillType || 'limit', spreadPct: o.spreadPct ?? null };
+  pos.risk = openRisk(pos);
+  st.positions.push(pos);
+  st.log.unshift(`${stamp(t)} otwarto ${o.base} ${o.side} (${IV_LABEL[o.iv] || o.iv}, kopia aplikacji 2:1) po ${entry.toPrecision(5)}${pos.fillType === 'limit' ? ' (zlecenie z limitem)' : ''}`);
+  return pos;
+}
+// 0. czekające zlecenia z limitem: wykonane → pozycja, po czasie → anulowane
+async function copyFills(key, st, barsFor, byBase, now) {
+  st.pending = st.pending || [];
+  for (const o of [...st.pending]) {
+    const f = limitFill(o, (await barsFor(o.sym)) || [], now);
+    if (f) {
+      const r = copyOpen(st, o, f.px, f.t, byBase, key);
+      if (typeof r === 'string') st.log.unshift(`${stamp(now)} zlecenie ${o.base} ${o.side} wykonane, ale pominięte: ${r}`);
+      st.pending = st.pending.filter(x => x !== o);
+    } else if (now >= o.expires) {
+      st.log.unshift(`${stamp(now)} zlecenie z limitem ${o.base} ${o.side} po ${o.limit.toPrecision(5)} wygasło – cena nie wróciła`);
+      st.pending = st.pending.filter(x => x !== o);
+    }
+  }
+}
+// 3. nowe wejścia F
+function copyEntries(key, st, hist, byBase, now, skip) {
+  st.pending = st.pending || [];
+  const picks = copyCandidates(st, hist, now);
+  st.lastPickT = Math.max(st.lastPickT || now - 30 * 6e4, ...picks.map(p => p.t));
+  let opened = 0;
+  for (const p of picks) {
+    const live = byBase.get(E.cleanBase(p.base));
+    if (!live || !(live.price > 0)) { skip('brak coina na BingX'); continue; }
+    if (st.positions.length + st.pending.length >= ACCOUNTS[key].maxOpen) { skip('maks. liczba pozycji'); continue; }
+    const cb = E.cleanBase(p.base);
+    if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { skip('już otwarta pozycja na coinie'); continue; }
+    const L = p.dir === 'LONG', worse = L ? live.price / p.price - 1 : 1 - live.price / p.price;
+    if (worse > COPY.maxSlip) { skip('cena uciekła o ponad 0,2%'); continue; }
+    const o = { id: `${now}-${live.sym}`, pickId: p.id, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, limit: p.price, target: p.target, stop: p.stop,
+      end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
+      spreadPct: live.bid > 0 && live.ask > 0 ? +((live.ask - live.bid) / live.price * 100).toFixed(3) : null };
+    if (worse <= 0) {
+      // cena już po lepszej stronie limitu → zlecenie wykonuje się od razu po cenie rynkowej (z poślizgiem, nie gorzej niż limit)
+      const px = L ? Math.min(fill(live.price, 'LONG', true), p.price) : Math.max(fill(live.price, 'SHORT', true), p.price);
+      const r = copyOpen(st, { ...o, fillType: 'od razu' }, px, now, byBase, key);
+      if (typeof r === 'string') skip(r); else opened++;
+    } else {
+      st.pending.push(o);
+      st.log.unshift(`${stamp(now)} zlecenie z limitem ${p.base} ${p.dir} po ${p.price.toPrecision(5)} (cena teraz ${live.price.toPrecision(5)}, ${IV_LABEL[p.iv] || p.iv})`);
+      skip('czeka zlecenie z limitem');
+    }
+  }
+  return opened;
+}
+
 async function runAccount(key, st, res, byBase, barsFor, now) {
   const riskPct = ACCOUNTS[key].riskPct || BASE.riskPct, maxOpen = ACCOUNTS[key].maxOpen || BASE.maxOpen;
   // 0. dzień (czas polski) – baza dnia = equity PRZED rozliczeniem tego skanu
   const today = dayKey(now);
   if (!st.day || st.day.date !== today) st.day = { date: today, startEquity: +(st.balance + unrealized(st, byBase)).toFixed(4), halted: false };
   if (st.day.startEquity === undefined) st.day.startEquity = st.day.startBalance || st.balance; // stary format
+  // 0b. konto F: wykonanie / wygaśnięcie zleceń z limitem (przed rozliczeniem – nowa pozycja rozlicza się od świecy wejścia)
+  if (ACCOUNTS[key].copy) await copyFills(key, st, barsFor, byBase, now);
   // 1. rozliczanie
   for (const p of [...st.positions]) {
     const bars = await barsFor(p.sym);
@@ -262,6 +359,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   const skip = r => { rej[r] = (rej[r] || 0) + 1; };
   if (st.day.halted) skip('dzienny limit straty');
   else if (st.observe) skip('tryb obserwacji');
+  else if (ACCOUNTS[key].copy) opened = copyEntries(key, st, res.history, byBase, now, skip);
   else {
     for (const c of candidates(key, res)) {
       // konto E: pozycje trendowe (dzienne, długie) mają osobną pulę 3 miejsc, żeby nie wypychały transakcji 24 godz.
@@ -318,6 +416,8 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
 async function main() {
   const now = Date.now();
   const res = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'results.json'), 'utf8'));
+  // historia zielonych scenariuszy aplikacji (zapisana przez skaner w tym samym przebiegu) – dla konta F
+  try { res.history = JSON.parse(fs.readFileSync(path.join(OUT_DIR, 'history.json'), 'utf8')); } catch (e) { res.history = []; console.log('Bot: brak historii aplikacji – konto F bez nowych wejść'); }
   let prev = loadState();
   if (prev && !prev.accounts && prev.balance !== undefined) prev = { accounts: { A: prev } }; // stary format
   if (!prev) console.log('Bot: pierwszy start – nowe konta po 1000 USDT');
@@ -352,4 +452,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
