@@ -233,3 +233,9 @@ test('konto F: zlecenie z limitem wygasa, gdy cena nie wróci', async () => {
   assert.strictEqual(st.positions.length, 0);
   assert.ok(st.log[0].includes('wygasło'));
 });
+
+test('konto F: pomija scenariusze 14-dniowe', () => {
+  const now = Date.UTC(2026, 10, 20, 10, 5);
+  const mk = iv => ({ id: iv, method: 2, status: 'open', t: now - 6e4, end: now + 99 * H, iv, base: 'A' + iv, dir: 'LONG', price: 1, target: 1.1, stop: 0.95 });
+  assert.deepStrictEqual(B.copyCandidates({}, [mk('1h'), mk('4h'), mk('1d')], now).map(p => p.iv).sort(), ['1h', '4h']);
+});
