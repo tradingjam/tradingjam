@@ -1,4 +1,4 @@
-// Bot „na sucho” (paper trading) – sześć WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
+// Bot „na sucho” (paper trading) – siedem WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
 // Co godzinę, po skanie: rozlicza pozycje (cel / stop / koniec czasu) i otwiera nowe.
 // Konta różnią się tylko sposobem wyboru scenariuszy – żeby na żywo sprawdzić, co najlepiej mnoży kapitał:
 //   A „Duży zysk 2:1”        – zielone scenariusze w układzie 2:1
@@ -11,6 +11,10 @@
 //                                nic więcej; wejście zleceniem z limitem po cenie z aplikacji (ważne 1 godz.), cel i stop
 //                                z aplikacji; pomija scenariusz, gdy cena uciekła o ponad 0,2%. Mierzy, ile z wyniku aplikacji
 //                                zostaje po kosztach na prawdziwych cenach.
+//   G „Wskaźniki – też młode coiny” – bez modelu i bez historii coina: gra z trendem na świecach 1h (EMA20/EMA50, RSI,
+//                                wolumen, ATR). Trend spadkowy → short, gdy odbicie do EMA20 na słabym wolumenie gaśnie;
+//                                trend wzrostowy → long po korekcie do EMA20. Stop za szczytem/dołkiem odbicia, cel 2R,
+//                                po celu ciągnie zysk. Eksperyment – reguła NIE była testowana na historii.
 //
 // ZASADY ROZLICZANIA (metoda 2, od 16.11.2026) – stosowane do nowych pozycji i dalszej części już otwartych:
 // • tylko ZAMKNIĘTE świece; każda świeca przetwarzana dokładnie raz (p.checkedTo = koniec ostatniej przetworzonej),
@@ -45,6 +49,7 @@ const ACCOUNTS = {
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Jeśli cena uciekła o ponad 0,2%, scenariusz jest pomijany. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true },
+  G: { name: 'Wskaźniki – też młode coiny', desc: 'Nie korzysta z modelu ani z historii coina, więc gra też najmłodsze coiny. Patrzy tylko na wykres godzinowy: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
 const COPY = { maxSlip: 0.002, limitMs: 36e5 };
@@ -236,6 +241,56 @@ function rejectEntry(c, live, now, resAgeMs) {
   return null;
 }
 
+// ---------- konto G: wskaźniki (bez modelu) ----------
+const emaArr = (x, n) => { const a = 2 / (n + 1), o = [x[0]]; for (let i = 1; i < x.length; i++) o.push(o[i - 1] + a * (x[i] - o[i - 1])); return o; };
+function rsiArr(c, n = 14) {
+  const o = new Array(c.length).fill(50); let g = 0, l = 0;
+  for (let i = 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1], up = Math.max(d, 0), dn = Math.max(-d, 0);
+    if (i <= n) { g += up / n; l += dn / n; } else { g = (g * (n - 1) + up) / n; l = (l * (n - 1) + dn) / n; }
+    if (i >= n) o[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
+  }
+  return o;
+}
+// sygnał na ZAMKNIĘTYCH świecach 1h (k = { t,o,h,l,c,v }); zwraca { side, stopPct, price, why } albo null
+function indSignal(k, now) {
+  const n = k.c.length; if (n < 60) return null;
+  let m = n; while (m > 0 && k.t[m - 1] + H1 > now) m--; // tylko zamknięte
+  if (m < 60 || now - (k.t[m - 1] + H1) > H1) return null; // ostatnia zamknięta świeca musi być świeża
+  const c = k.c.slice(0, m), h = k.h.slice(0, m), l = k.l.slice(0, m), o = k.o.slice(0, m), v = k.v.slice(0, m);
+  const e20 = emaArr(c, 20), e50 = emaArr(c, 50), rsi = rsiArr(c), i = m - 1;
+  let atr = 0; for (let j = i - 13; j <= i; j++) atr += Math.max(h[j] - l[j], Math.abs(h[j] - c[j - 1]), Math.abs(l[j] - c[j - 1])) / 14;
+  const W = 6, from = i - W + 1;
+  const volBounce = v.slice(from, i + 1).reduce((a, x) => a + x, 0) / W, volBase = v.slice(i - 26, from).reduce((a, x) => a + x, 0) / 20;
+  const down = [...Array(10).keys()].every(d => e20[i - d] < e50[i - d]) && e50[i] < e50[i - 10] && c[i] < e50[i];
+  const up = [...Array(10).keys()].every(d => e20[i - d] > e50[i - d]) && e50[i] > e50[i - 10] && c[i] > e50[i];
+  const hiW = Math.max(...h.slice(from, i + 1)), loW = Math.min(...l.slice(from, i + 1));
+  const rsiMax = Math.max(...rsi.slice(from, i + 1)), rsiMin = Math.min(...rsi.slice(from, i + 1));
+  let side = null, stop = 0;
+  // short: odbicie do EMA20 (RSI ≥ 50) na słabym wolumenie, ostatnia świeca spadkowa zamyka się pod EMA20, RSI zawraca w dół
+  if (down && hiW >= e20[i] && rsiMax >= 50 && c[i] < e20[i] && c[i] < o[i] && rsi[i] < rsi[i - 1] && rsi[i] > 30 && volBounce < volBase) { side = 'SHORT'; stop = hiW + 0.3 * atr; }
+  if (up && loW <= e20[i] && rsiMin <= 50 && c[i] > e20[i] && c[i] > o[i] && rsi[i] > rsi[i - 1] && rsi[i] < 70 && volBounce < volBase) { side = 'LONG'; stop = loW - 0.3 * atr; }
+  if (!side) return null;
+  const stopPct = Math.abs(stop / c[i] - 1) * 100;
+  if (stopPct < 1.3 || stopPct > 8) return null;
+  return { side, stopPct, price: c[i], t: k.t[i], why: `trend ${side === 'SHORT' ? 'spadkowy' : 'wzrostowy'}, RSI ${rsi[i].toFixed(0)}, wolumen odbicia ${(volBounce / volBase * 100).toFixed(0)}% średniej` };
+}
+// kandydaci G: wstępne sito z wyników skanu (EMA20/EMA50 i cena), potem świece 1h z BingX dla najmocniejszych trendów
+async function indCandidates(res, byBase, now) {
+  if (!res.klines1h) return [];
+  const pre = res.coins.filter(co => co.ex === 'bingx' && co.res && co.res['1h'] && co.res['1h'].ma && byBase.has(E.cleanBase(co.base)))
+    .map(co => { const ma = co.res['1h'].ma, pr = co.res['1h'].price; return { co, s: ma.ema50 > 0 ? (ma.ema20 / ma.ema50 - 1) : 0, pr, ma }; })
+    .filter(x => (x.s < 0 && x.pr < x.ma.ema50) || (x.s > 0 && x.pr > x.ma.ema50))
+    .sort((a, b) => Math.abs(b.s) - Math.abs(a.s)).slice(0, 30);
+  const out = [];
+  for (const x of pre) {
+    let k = null; try { k = await res.klines1h(byBase.get(E.cleanBase(x.co.base)).sym); } catch (e) { }
+    const sg = k && indSignal(k, now); if (!sg) continue;
+    out.push({ coin: x.co, iv: '1h', side: sg.side, p: 0, mode: 'ind', lift: Math.abs(x.s), movePct: sg.stopPct * 2, stopPct: sg.stopPct, ev: 0, signalPrice: sg.price, tickerPrice: sg.price, why: sg.why });
+  }
+  return out;
+}
+
 // ---------- konto F: kopia aplikacji ----------
 // nowe zielone scenariusze z historii aplikacji (zapisane po ostatnim uruchomieniu konta)
 function copyCandidates(st, hist, now) {
@@ -362,7 +417,8 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   else if (st.observe) skip('tryb obserwacji');
   else if (ACCOUNTS[key].copy) opened = copyEntries(key, st, res.history, byBase, now, skip);
   else {
-    for (const c of candidates(key, res)) {
+    const list = ACCOUNTS[key].ind ? await indCandidates(res, byBase, now) : candidates(key, res);
+    for (const c of list) {
       // konto E: pozycje trendowe (dzienne, długie) mają osobną pulę 3 miejsc, żeby nie wypychały transakcji 24 godz.
       // (symulacja 18.11.2026: wspólna pula obniżała wynik E z ok. +8,6% do +4,5% mies.)
       const isTrend = c.mode === 'trend', nTrend = st.positions.filter(p => p.mode === 'trend').length;
@@ -375,7 +431,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       const tgt = c.movePct / 100, stp = c.stopPct / 100;
       // ciągnięcie zysku: konto D zawsze; konto E tylko w układzie 2:1 – tylko tam sprawdziliśmy je w teście na historii
       // (24 godz.: +0,15R → +0,42R na transakcję); przy 1:1 i 1:2 E zamyka na celu
-      const trail = key === 'D' || (key === 'E' && c.mode === 'big');
+      const trail = key === 'D' || (key === 'E' && c.mode === 'big') || c.mode === 'ind';
       const chand = c.mode === 'trend'; // stop ciągnięty od wejścia, aktualizowany tylko na zamknięciach dnia
       const entry = fill(live.price, c.side, true);
       const eqNow = st.balance + unrealized(st, byBase);
@@ -400,7 +456,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
       pos.risk = openRisk(pos);
       if (!(pos.qty > 0) || !isFinite(pos.qty) || (pos.side === 'LONG' ? !(pos.stop < pos.entry && pos.entry < pos.target) : !(pos.target < pos.entry && pos.entry < pos.stop))) continue;
       st.positions.push(pos);
-      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : c.iv === '1d' ? 'do 42 dni' : '3 dni'}, ${c.mode === 'trend' ? 'z trendem: ' + ((c.trendSig && c.trendSig.kind) || 'dzienne') : c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}`);
+      st.log.unshift(`${stamp(now)} otwarto ${c.coin.base} ${c.side} (${c.iv === '1h' ? '24 godz.' : c.iv === '1d' ? 'do 42 dni' : '3 dni'}, ${c.mode === 'trend' ? 'z trendem: ' + ((c.trendSig && c.trendSig.kind) || 'dzienne') : c.mode === 'ind' ? 'wskaźniki 2:1' : c.mode === 'big' ? '2:1' : c.mode === 'safe' ? '1:2' : '1:1'}) po ${entry.toPrecision(5)}${c.why ? ' – ' + c.why : ''}`);
       opened++;
     }
   }
@@ -447,10 +503,13 @@ async function main() {
     return cache.get(sym);
   };
 
+  // konto G: świece 1h z BingX (tylko dla wstępnie wybranych coinów)
+  const k1Cache = new Map();
+  res.klines1h = async sym => { if (!k1Cache.has(sym)) k1Cache.set(sym, await X.bingxKlines(sym, '1h', 120)); return k1Cache.get(sym); };
   for (const key of Object.keys(ACCOUNTS)) console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, byBase, barsFor, now));
   state.updatedAt = now;
   saveState(path.join(OUT_DIR, 'bot.json'), state);
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };

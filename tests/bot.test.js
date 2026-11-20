@@ -239,3 +239,36 @@ test('konto F: pomija scenariusze 14-dniowe', () => {
   const mk = iv => ({ id: iv, method: 2, status: 'open', t: now - 6e4, end: now + 99 * H, iv, base: 'A' + iv, dir: 'LONG', price: 1, target: 1.1, stop: 0.95 });
   assert.deepStrictEqual(B.copyCandidates({}, [mk('1h'), mk('4h'), mk('1d')], now).map(p => p.iv).sort(), ['1h', '4h']);
 });
+
+// ---------- konto G: wskaźniki ----------
+// trend + odbicie (6 świec, słaby wolumen) + świeca odrzucenia
+function trendK(dir, bounceVol = 50) {
+  const k = { t: [], o: [], h: [], l: [], c: [], v: [] }, now = Date.UTC(2026, 10, 20, 10, 0), N = 90, s = dir === 'down' ? 1 : -1; let p = 100;
+  for (let i = 0; i < N; i++) {
+    const o = p, c = i < N - 7 ? p * (1 - s * 0.006 * (1 + 0.3 * Math.sin(i))) : i < N - 1 ? p * (1 + s * 0.012) : p * (1 - s * 0.025);
+    k.t.push(now - (N - i) * H); k.o.push(o); k.c.push(c); k.h.push(Math.max(o, c) * 1.002); k.l.push(Math.min(o, c) * 0.998); k.v.push(i >= N - 6 ? bounceVol : 100); p = c;
+  }
+  return { k, now };
+}
+test('konto G: short po odbiciu w trendzie spadkowym, long po korekcie we wzrostowym', () => {
+  const a = trendK('down'), b = trendK('up');
+  assert.strictEqual(B.indSignal(a.k, a.now).side, 'SHORT');
+  assert.strictEqual(B.indSignal(b.k, b.now).side, 'LONG');
+  const sg = B.indSignal(a.k, a.now); assert.ok(sg.stopPct >= 1.3 && sg.stopPct <= 8);
+});
+test('konto G: brak sygnału, gdy odbicie na mocnym wolumenie albo świece nieświeże', () => {
+  const a = trendK('down', 150); assert.strictEqual(B.indSignal(a.k, a.now), null);
+  const b = trendK('down'); assert.strictEqual(B.indSignal(b.k, b.now + 3 * H), null);
+});
+test('konto G: otwiera pozycję z celem 2R i ciągnięciem zysku', async () => {
+  const { k, now } = trendK('down');
+  const price = k.c[k.c.length - 1];
+  const res2 = { generatedAt: new Date(now).toISOString(), coins: [{ ex: 'bingx', base: 'YNG', sym: 'YNG-USDT', price, res: { '1h': { price, ma: { ema20: price * 1.01, ema50: price * 1.08 } } } }], klines1h: async () => k };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['YNG', { price, qv: 1e7, sym: 'YNG-USDT' }]]);
+  await B.runAccount('G', st, res2, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 1);
+  const p = st.positions[0];
+  assert.strictEqual(p.side, 'SHORT'); assert.strictEqual(p.mode, 'ind'); assert.strictEqual(p.trail, true);
+  assert.ok(Math.abs((p.entry - p.target) / (p.stop - p.entry) - 2) < 0.01);
+});
