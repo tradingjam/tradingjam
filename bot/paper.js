@@ -11,10 +11,10 @@
 //                                nic więcej; wejście zleceniem z limitem po cenie z aplikacji (ważne 1 godz.), cel i stop
 //                                z aplikacji; pomija scenariusz, gdy cena uciekła o ponad 0,2%. Mierzy, ile z wyniku aplikacji
 //                                zostaje po kosztach na prawdziwych cenach.
-//   G „Wskaźniki – też młode coiny” – bez modelu i bez historii coina: gra z trendem na świecach 1h (EMA20/EMA50, RSI,
-//                                wolumen, ATR). Trend spadkowy → short, gdy odbicie do EMA20 na słabym wolumenie gaśnie;
-//                                trend wzrostowy → long po korekcie do EMA20. Stop za szczytem/dołkiem odbicia, cel 2R,
-//                                po celu ciągnie zysk. Eksperyment – reguła NIE była testowana na historii.
+//   G „Wskaźniki + filtr modelu” – gra z trendem na świecach 1h (EMA20/EMA50, RSI, wolumen, ATR). Trend spadkowy → short,
+//                                gdy odbicie do EMA20 na słabym wolumenie gaśnie; trend wzrostowy → long po korekcie do EMA20.
+//                                Wejście tylko, gdy model 2:1 daje w tym kierunku ≥ 38% (od 21.11; wcześniej 45% – zero wejść).
+//                                Stop za szczytem/dołkiem odbicia, cel 2R, po celu ciągnie zysk. Eksperyment – bez testu na historii.
 //
 // ZASADY ROZLICZANIA (metoda 2, od 16.11.2026) – stosowane do nowych pozycji i dalszej części już otwartych:
 // • tylko ZAMKNIĘTE świece; każda świeca przetwarzana dokładnie raz (p.checkedTo = koniec ostatniej przetworzonej),
@@ -49,7 +49,7 @@ const ACCOUNTS = {
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Jeśli cena uciekła o ponad 0,2%, scenariusz jest pomijany. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true },
-  G: { name: 'Wskaźniki – też młode coiny', desc: 'Nie korzysta z modelu ani z historii coina, więc gra też najmłodsze coiny. Patrzy tylko na wykres godzinowy: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 45% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
+  G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
 const COPY = { maxSlip: 0.002, limitMs: 36e5 };
@@ -275,7 +275,8 @@ function indSignal(k, now) {
   if (stopPct < 1.3 || stopPct > 8) return null;
   return { side, stopPct, price: c[i], t: k.t[i], why: `trend ${side === 'SHORT' ? 'spadkowy' : 'wzrostowy'}, RSI ${rsi[i].toFixed(0)}, wolumen odbicia ${(volBounce / volBase * 100).toFixed(0)}% średniej` };
 }
-const G_MIN_P = 0.45;
+// 21.11.2026: próg obniżony z 45% do 38% – przy 45% przez ~34 godz. sito przechodził 1 coin z ~250 (zero wejść)
+const G_MIN_P = 0.38;
 const G_P = (co, side) => { const b = co.res && co.res['1h'] && co.res['1h'].big, x = b && b[side === 'LONG' ? 'long' : 'short']; return x && x.p > 0 ? x.p : 0; };
 // kandydaci G: wstępne sito z wyników skanu (EMA20/EMA50 i cena), potem świece 1h z BingX dla najmocniejszych trendów
 async function indCandidates(res, byBase, now) {
@@ -285,7 +286,7 @@ async function indCandidates(res, byBase, now) {
   const pre = [...res.coins].sort((a, b) => (b.ex === 'bingx') - (a.ex === 'bingx')).filter(co => !seen.has(E.cleanBase(co.base)) && seen.add(E.cleanBase(co.base)) && co.res && co.res['1h'] && co.res['1h'].ma && byBase.has(E.cleanBase(co.base)))
     .map(co => { const ma = co.res['1h'].ma, pr = co.res['1h'].price; return { co, s: ma.ema50 > 0 ? (ma.ema20 / ma.ema50 - 1) : 0, pr, ma }; })
     .filter(x => (x.s < 0 && x.pr < x.ma.ema50) || (x.s > 0 && x.pr > x.ma.ema50))
-    // model w układzie 2:1 musi dawać ≥ 45% w kierunku trendu (próg opłacalności ok. 33%) – na prośbę z 20.11.2026
+    // model w układzie 2:1 musi dawać ≥ G_MIN_P (38%) w kierunku trendu (próg opłacalności ok. 33%) – od 20.11.2026, obniżone 21.11
     .filter(x => G_P(x.co, x.s < 0 ? 'SHORT' : 'LONG') >= G_MIN_P)
     .sort((a, b) => Math.abs(b.s) - Math.abs(a.s)).slice(0, 30);
   const out = [];

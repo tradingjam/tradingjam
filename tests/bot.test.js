@@ -260,7 +260,7 @@ test('konto G: brak sygnału, gdy odbicie na mocnym wolumenie albo świece nieś
   const a = trendK('down', 150); assert.strictEqual(B.indSignal(a.k, a.now), null);
   const b = trendK('down'); assert.strictEqual(B.indSignal(b.k, b.now + 3 * H), null);
 });
-for (const [PG, n] of [[0.5, 1], [0.4, 0]]) test(`konto G: model 2:1 ${PG * 100}% → ${n ? 'wchodzi (cel 2R, ciągnięcie zysku)' : 'pomija (poniżej 45%)'}`, async () => {
+for (const [PG, n] of [[0.5, 1], [0.4, 1], [0.35, 0]]) test(`konto G: model 2:1 ${PG * 100}% → ${n ? 'wchodzi (cel 2R, ciągnięcie zysku)' : 'pomija (poniżej 38%)'}`, async () => {
   const { k, now } = trendK('down');
   const price = k.c[k.c.length - 1];
   const res2 = { generatedAt: new Date(now).toISOString(), coins: [{ ex: 'bingx', base: 'YNG', sym: 'YNG-USDT', price, res: { '1h': { price, ma: { ema20: price * 1.01, ema50: price * 1.08 }, big: { short: { p: PG }, long: { p: 0.2 } } } } }], klines1h: async () => k };
