@@ -1,0 +1,17 @@
+name: Test powiadomień Telegram
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wyślij wiadomość testową
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then echo "Brak sekretów TELEGRAM_TOKEN / TELEGRAM_CHAT_ID"; exit 1; fi
+          code=$(curl -s -o resp.json -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=🤖 TradingJam bot podłączony ✅ Od teraz dostaniesz tu każde wejście i wyjście botów (na sucho).")
+          echo "HTTP $code"; python3 -c "import json;d=json.load(open('resp.json'));print('ok' if d.get('ok') else 'błąd: '+str(d.get('description')))"
+          [ "$code" = "200" ]
