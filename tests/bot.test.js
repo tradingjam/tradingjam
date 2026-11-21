@@ -273,3 +273,14 @@ for (const [PG, n] of [[0.5, 1], [0.4, 0]]) test(`konto G: model 2:1 ${PG * 100}
   assert.strictEqual(p.side, 'SHORT'); assert.strictEqual(p.mode, 'ind'); assert.strictEqual(p.trail, true);
   assert.ok(Math.abs((p.entry - p.target) / (p.stop - p.entry) - 2) < 0.01);
 });
+
+test('powiadomienie: tylko nowe wpisy z dziennika, z ikonami; brak zdarzeń → brak wiadomości', () => {
+  const now = Date.UTC(2026, 10, 21, 10, 5);
+  const state = { accounts: { A: { balance: 1012.3, log: ['2026-11-21T10:05 zamknięto XPIN SHORT (cel) +18.40 USDT', '2026-11-21T10:05 otwarto JAGENT LONG (24 godz., 2:1) po 3.2090e-6', '2026-11-20T08:05 stare'] }, G: { balance: 990, log: ['2026-11-20T08:05 stare'] } } };
+  const msg = B.buildNotice(state, { A: 1, G: 1 }, now);
+  assert.ok(msg.includes('🟢 A · otwarto JAGENT LONG'));
+  assert.ok(msg.includes('✅ A · zamknięto XPIN SHORT'));
+  assert.ok(!msg.includes('stare')); assert.ok(!msg.includes('2026-'));
+  assert.ok(msg.includes('Salda: A 1012 · G 990'));
+  assert.strictEqual(B.buildNotice(state, { A: 3, G: 1 }, now), null);
+});

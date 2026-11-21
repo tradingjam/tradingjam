@@ -513,10 +513,36 @@ async function main() {
   // konto G: świece 1h z BingX (tylko dla wstępnie wybranych coinów)
   const k1Cache = new Map();
   res.klines1h = async sym => { if (!k1Cache.has(sym)) k1Cache.set(sym, await X.bingxKlines(sym, '1h', 120)); return k1Cache.get(sym); };
+  const logLen = Object.fromEntries(Object.keys(ACCOUNTS).map(k => [k, (state.accounts[k].log || []).length]));
   for (const key of Object.keys(ACCOUNTS)) console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, byBase, barsFor, now));
   state.updatedAt = now;
   saveState(path.join(OUT_DIR, 'bot.json'), state);
+  await sendTelegram(buildNotice(state, logLen, now));
+}
+
+// ---------- powiadomienia na Telegram (tylko gdy coś się wydarzyło) ----------
+// sekrety TELEGRAM_TOKEN i TELEGRAM_CHAT_ID ustawia właściciel w GitHubie; bez nich nic nie jest wysyłane
+const NOTICE_ICON = l => / otwarto .* LONG/.test(l) ? '🟢' : / otwarto .* SHORT/.test(l) ? '🔴' : / zamknięto .* \+/.test(l) ? '✅' : / zamknięto /.test(l) ? '❌'
+  : /zlecenie z limitem .* po .* \(cena teraz/.test(l) ? '⏳' : /wygasło|pominięte/.test(l) ? '⌛' : '⚠️';
+function buildNotice(state, logLen, now) {
+  const out = [];
+  for (const [k, a] of Object.entries(state.accounts)) {
+    const fresh = (a.log || []).slice(0, Math.max(0, (a.log || []).length - (logLen[k] || 0))).reverse();
+    for (const l of fresh) out.push(`${NOTICE_ICON(l)} ${k} · ${l.replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d\s+/, '')}`);
+  }
+  if (!out.length) return null;
+  const bal = Object.entries(state.accounts).map(([k, a]) => `${k} ${a.balance.toFixed(0)}`).join(' · ');
+  const hhmm = new Date(now).toLocaleTimeString('pl-PL', { timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit' });
+  return `🤖 TradingJam bot (na sucho) · ${hhmm}\n\n${out.join('\n')}\n\nSalda: ${bal}`.slice(0, 4000);
+}
+async function sendTelegram(text) {
+  const token = process.env.TELEGRAM_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
+  if (!text || !token || !chat) return;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chat, text, disable_web_page_preview: true }) });
+    console.log('Telegram:', r.ok ? 'wysłano' : 'błąd ' + r.status);
+  } catch (e) { console.log('Telegram: nie udało się wysłać'); }
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
