@@ -9,7 +9,7 @@
 //                                przy remisie wyższa szansa; ryzyko 0,5% na pozycję, maks. 4 pozycje
 //   F „Kopia aplikacji”      – dokładnie te zielone scenariusze, które aplikacja zapisuje w historii (24 godz. i 3 dni),
 //                                nic więcej; wejście zleceniem z limitem po cenie z aplikacji (ważne 1 godz.), cel i stop
-//                                z aplikacji; pomija scenariusz, gdy cena uciekła o ponad 0,2%. Mierzy, ile z wyniku aplikacji
+//                                z aplikacji; scenariusze z Binance/OKX wchodzą po cenie BingX z celem i stopem w tych samych procentach. Mierzy, ile z wyniku aplikacji
 //                                zostaje po kosztach na prawdziwych cenach.
 //   G „Wskaźniki + filtr modelu” – gra z trendem na świecach 1h (EMA20/EMA50, RSI, wolumen, ATR). Trend spadkowy → short,
 //                                gdy odbicie do EMA20 na słabym wolumenie gaśnie; trend wzrostowy → long po korekcie do EMA20.
@@ -48,11 +48,11 @@ const ACCOUNTS = {
   C: { name: 'Złoty środek', desc: 'Dla każdego coina bot sam wybiera układ 2:1 albo 1:1 – ten o wyższym oczekiwanym wyniku po kosztach.' },
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
-  F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Jeśli cena uciekła o ponad 0,2%, scenariusz jest pomijany. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true },
+  F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
-const COPY = { maxSlip: 0.002, limitMs: 36e5 };
+const COPY = { limitMs: 36e5 };
 // Reset kont przy zmianie zasad: poprzedni okres trafia do archiwum w tym samym pliku (nic nie jest kasowane)
 const RESET_TAG = '2026-11-17-metoda2';
 const RESET_NOTE = 'Nowe zasady od 17.11.2026: rozliczanie na świecach 5-min (każda raz), przewaga ≥ 8 pkt, tylko 24 godz., limit ryzyka 5%, bez powtórek po stopie.';
@@ -362,23 +362,36 @@ function copyEntries(key, st, hist, byBase, now, skip) {
   const picks = copyCandidates(st, hist, now);
   st.lastPickT = Math.max(st.lastPickT || now - 30 * 6e4, ...picks.map(p => p.t));
   let opened = 0;
+  const pass = (p, why) => { skip(why); st.log.unshift(`${stamp(now)} pominięto ${p.base} ${p.dir} (${IV_LABEL[p.iv] || p.iv}): ${why}`); };
   for (const p of picks) {
     const live = byBase.get(E.cleanBase(p.base));
-    if (!live || !(live.price > 0)) { skip('brak coina na BingX'); continue; }
-    if (st.positions.length + st.pending.length >= ACCOUNTS[key].maxOpen) { skip('maks. liczba pozycji'); continue; }
+    if (!live || !(live.price > 0)) { pass(p, 'brak coina na BingX'); continue; }
+    if (st.positions.length + st.pending.length >= ACCOUNTS[key].maxOpen) { pass(p, 'maks. liczba pozycji'); continue; }
     const cb = E.cleanBase(p.base);
-    if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { skip('już otwarta pozycja na coinie'); continue; }
-    const L = p.dir === 'LONG', worse = L ? live.price / p.price - 1 : 1 - live.price / p.price;
-    if (worse > COPY.maxSlip) { skip('cena uciekła o ponad 0,2%'); continue; }
-    const o = { id: `${now}-${live.sym}`, pickId: p.id, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, limit: p.price, target: p.target, stop: p.stop,
-      end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
+    if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { pass(p, 'już ma otwartą pozycję na tym coinie'); continue; }
+    const L = p.dir === 'LONG';
+    const base = { id: `${now}-${live.sym}`, pickId: p.id, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
       spreadPct: live.bid > 0 && live.ask > 0 ? +((live.ask - live.bid) / live.price * 100).toFixed(3) : null };
+    if (p.ex !== 'bingx') {
+      // scenariusz z innej giełdy (Binance/OKX): ceny różnią się między giełdami, więc wejście po cenie BingX,
+      // a cel i stop w tych samych procentach co w aplikacji
+      const k = live.price / p.price, px = fill(live.price, p.dir, true);
+      const o = { ...base, limit: live.price, target: p.target * k, stop: p.stop * k, fillType: 'od razu (scenariusz z ' + (p.ex === 'okx' ? 'OKX' : 'Binance') + ', ceny z BingX)' };
+      const r = copyOpen(st, o, px, now, byBase, key);
+      if (typeof r === 'string') pass(p, r); else opened++;
+      continue;
+    }
+    // scenariusz z BingX: zlecenie z limitem dokładnie po cenie z aplikacji
+    const o = { ...base, limit: p.price, target: p.target, stop: p.stop };
+    if (L ? live.price >= p.target : live.price <= p.target) { pass(p, 'cena już doszła do celu'); continue; }
+    if (L ? live.price <= p.stop : live.price >= p.stop) { pass(p, 'cena już za stopem'); continue; }
+    const worse = L ? live.price / p.price - 1 : 1 - live.price / p.price;
     if (worse <= 0) {
-      // cena już po lepszej stronie limitu → zlecenie wykonuje się od razu po cenie rynkowej (z poślizgiem, nie gorzej niż limit)
       const px = L ? Math.min(fill(live.price, 'LONG', true), p.price) : Math.max(fill(live.price, 'SHORT', true), p.price);
       const r = copyOpen(st, { ...o, fillType: 'od razu' }, px, now, byBase, key);
-      if (typeof r === 'string') skip(r); else opened++;
+      if (typeof r === 'string') pass(p, r); else opened++;
     } else {
+      // cena uciekła: zlecenie czeka godzinę na powrót do ceny z aplikacji (nie wchodzi drożej)
       st.pending.push(o);
       st.log.unshift(`${stamp(now)} zlecenie z limitem ${p.base} ${p.dir} po ${p.price.toPrecision(5)} (cena teraz ${live.price.toPrecision(5)}, ${IV_LABEL[p.iv] || p.iv})`);
       skip('czeka zlecenie z limitem');
@@ -524,7 +537,7 @@ async function main() {
 // ---------- powiadomienia na Telegram (tylko gdy coś się wydarzyło) ----------
 // sekrety TELEGRAM_TOKEN i TELEGRAM_CHAT_ID ustawia właściciel w GitHubie; bez nich nic nie jest wysyłane
 const NOTICE_ICON = l => / otwarto .* LONG/.test(l) ? '🟢' : / otwarto .* SHORT/.test(l) ? '🔴' : / zamknięto .* \+/.test(l) ? '✅' : / zamknięto /.test(l) ? '❌'
-  : /zlecenie z limitem .* po .* \(cena teraz/.test(l) ? '⏳' : /wygasło|pominięte/.test(l) ? '⌛' : '⚠️';
+  : /zlecenie z limitem .* po .* \(cena teraz/.test(l) ? '⏳' : /wygasło|pominięte/.test(l) ? '⌛' : /pominięto/.test(l) ? '⚪' : '⚠️';
 function buildNotice(state, logLen, now) {
   const out = [];
   for (const [k, a] of Object.entries(state.accounts)) {

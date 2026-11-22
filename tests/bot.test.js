@@ -199,20 +199,23 @@ test('strategia z trendem: stop ciągnięty tylko na zamknięciach dnia, bez cel
 // ---------- konto F: kopia aplikacji ----------
 test('konto F: zlecenie z limitem po cenie z aplikacji → wykonanie → cel z aplikacji', async () => {
   const now = Date.UTC(2026, 10, 20, 10, 5);
-  const hist = [{ id: 'x1', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', base: 'AAA', dir: 'LONG', price: 100, target: 104, stop: 98, p: 0.4, lift: 0.1 },
-    { id: 'x2', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', base: 'BBB', dir: 'SHORT', price: 50, target: 48, stop: 51, p: 0.4, lift: 0.09 }];
+  const hist = [{ id: 'x1', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', ex: 'bingx', base: 'AAA', dir: 'LONG', price: 100, target: 104, stop: 98, p: 0.4, lift: 0.1 },
+    { id: 'x2', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', ex: 'okx', base: 'BBB', dir: 'SHORT', price: 50, target: 48, stop: 51, p: 0.4, lift: 0.09 }];
   const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
   const byBase = new Map([['AAA', { price: 100.1, qv: 1e7, sym: 'AAA-USDT' }], ['BBB', { price: 49.8, qv: 1e7, sym: 'BBB-USDT' }]]); // BBB uciekło o 0,4%
   const r1 = { ...res, generatedAt: new Date(now).toISOString(), history: hist };
   await B.runAccount('F', st, r1, byBase, async () => [], now);
-  assert.strictEqual(st.positions.length, 0);
+  // AAA (BingX): zlecenie z limitem po 100; BBB (OKX): wejście od razu po cenie BingX, cel/stop w tych samych %
   assert.strictEqual(st.pending.length, 1);
   assert.strictEqual(st.pending[0].limit, 100);
-  assert.strictEqual(st.lastScan.rejected['cena uciekła o ponad 0,2%'], 1);
+  assert.strictEqual(st.positions.length, 1);
+  const bb = st.positions[0]; assert.strictEqual(bb.base, 'BBB');
+  assert.ok(Math.abs(bb.target / 49.8 - 48 / 50) < 1e-9 && Math.abs(bb.stop / 49.8 - 51 / 50) < 1e-9);
+  st.positions = []; // dalej sprawdzamy tylko AAA
   // godzinę później: świeca 5m po złożeniu zlecenia schodzi do 99,9 → wykonanie po 100, potem cel 104
   const bars = [bar(now - 6e4, 100.1, 100.2, 99.0, 100, M5), // świeca, w której złożono zlecenie – nie liczy się
     { t: now + 10 * 6e4, dur: M5, o: 100.1, h: 100.3, l: 99.9, c: 100.2 }, { t: now + 30 * 6e4, dur: M5, o: 101, h: 104.5, l: 100.8, c: 104 }];
-  await B.runAccount('F', st, { ...r1, history: hist }, byBase, async () => bars, now + H);
+  await B.runAccount('F', st, { ...r1, history: hist }, byBase, async sym => sym === 'AAA-USDT' ? bars : [], now + H);
   assert.strictEqual(st.pending.length, 0);
   assert.strictEqual(st.closed.length, 1);
   assert.strictEqual(st.closed[0].entry, 100);
@@ -236,7 +239,7 @@ test('konto F: zlecenie z limitem wygasa, gdy cena nie wróci', async () => {
 
 test('konto F: pomija scenariusze 14-dniowe', () => {
   const now = Date.UTC(2026, 10, 20, 10, 5);
-  const mk = iv => ({ id: iv, method: 2, status: 'open', t: now - 6e4, end: now + 99 * H, iv, base: 'A' + iv, dir: 'LONG', price: 1, target: 1.1, stop: 0.95 });
+  const mk = iv => ({ id: iv, ex: 'bingx', method: 2, status: 'open', t: now - 6e4, end: now + 99 * H, iv, base: 'A' + iv, dir: 'LONG', price: 1, target: 1.1, stop: 0.95 });
   assert.deepStrictEqual(B.copyCandidates({}, [mk('1h'), mk('4h'), mk('1d')], now).map(p => p.iv).sort(), ['1h', '4h']);
 });
 
