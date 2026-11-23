@@ -287,3 +287,22 @@ test('powiadomienie: tylko nowe wpisy z dziennika, z ikonami; brak zdarzeń → 
   assert.ok(msg.includes('Salda: A 1012 · G 990'));
   assert.strictEqual(B.buildNotice(state, { A: 3, G: 1 }, now), null);
 });
+
+test('konto H: kopia aplikacji, po celu ciągnie zysk zamiast zamykać', async () => {
+  const now = Date.UTC(2026, 10, 23, 10, 5);
+  const hist = [{ id: 'h1', ex: 'bingx', method: 2, status: 'open', t: now - 3 * 6e4, end: now + 24 * H, iv: '1h', base: 'AAA', dir: 'LONG', price: 100, target: 104, stop: 98, p: 0.4, lift: 0.1 }];
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['AAA', { price: 99.9, qv: 1e7, sym: 'AAA-USDT' }]]);
+  await B.runAccount('H', st, { ...res, generatedAt: new Date(now).toISOString(), history: hist }, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 1);
+  const p = st.positions[0];
+  assert.strictEqual(p.mode, 'copytrail'); assert.strictEqual(p.trail, true);
+  assert.ok(p.end > hist[0].end, 'dłuższy horyzont');
+  // cena idzie do 106 (powyżej celu 104), potem cofa do 103 → wyjście na ciągniętym stopie ok. 104 (106 − 1R=2)
+  const bars = [{ t: now + 6e5, dur: M5, o: 100, h: 102, l: 99.8, c: 101.5 }, { t: now + 12e5, dur: M5, o: 101.5, h: 106, l: 101.4, c: 105.5 },
+    { t: now + 18e5, dur: M5, o: 105.5, h: 105.6, l: 103, c: 103.2 }];
+  await B.runAccount('H', st, { ...res, generatedAt: new Date(now).toISOString(), history: hist }, byBase, async () => bars, now + H);
+  assert.strictEqual(st.closed.length, 1);
+  assert.strictEqual(st.closed[0].reason, 'ciągnięty stop');
+  assert.ok(st.closed[0].r > 1.7, 'R ' + st.closed[0].r);
+});

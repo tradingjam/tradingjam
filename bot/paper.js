@@ -1,4 +1,4 @@
-// Bot „na sucho” (paper trading) – siedem WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
+// Bot „na sucho” (paper trading) – osiem WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
 // Co godzinę, po skanie: rozlicza pozycje (cel / stop / koniec czasu) i otwiera nowe.
 // Konta różnią się tylko sposobem wyboru scenariuszy – żeby na żywo sprawdzić, co najlepiej mnoży kapitał:
 //   A „Duży zysk 2:1”        – zielone scenariusze w układzie 2:1
@@ -49,6 +49,7 @@ const ACCOUNTS = {
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true },
+  H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, copy: true, trail: true },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
@@ -333,12 +334,14 @@ function copyOpen(st, o, entry, t, byBase, key) {
   if (room <= eqNow * 0.05) return 'limit dźwigni';
   if (qty * entry > room) qty = room / entry;
   if (!(qty > 0) || !isFinite(qty)) return 'zła wielkość pozycji';
-  const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: 'copy', openedAt: t, end: o.end,
+  const ext = A.trail && o.pickT ? Math.max(0, o.end - o.pickT) : 0;
+  const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: A.trail ? 'copytrail' : 'copy', openedAt: t, end: o.end + ext,
+    ...(A.trail ? { trail: true, rDist: dist, best: entry } : {}),
     entry, qty, target: o.target, stop: o.stop, p: o.p || 0, ev: 0, lift: o.lift || 0, costR: +(costPerUnit(entry) / dist).toFixed(3),
     checkedTo: t, method: BASE.method, appPrice: o.limit, pickId: o.pickId, fillType: o.fillType || 'limit', spreadPct: o.spreadPct ?? null };
   pos.risk = openRisk(pos);
   st.positions.push(pos);
-  st.log.unshift(`${stamp(t)} otwarto ${o.base} ${o.side} (${IV_LABEL[o.iv] || o.iv}, kopia aplikacji 2:1) po ${entry.toPrecision(5)}${pos.fillType === 'limit' ? ' (zlecenie z limitem)' : ''}`);
+  st.log.unshift(`${stamp(t)} otwarto ${o.base} ${o.side} (${IV_LABEL[o.iv] || o.iv}, ${A.trail ? 'kopia + ciągnięcie zysku' : 'kopia aplikacji 2:1'}) po ${entry.toPrecision(5)}${pos.fillType === 'limit' ? ' (zlecenie z limitem)' : ''}`);
   return pos;
 }
 // 0. czekające zlecenia z limitem: wykonane → pozycja, po czasie → anulowane
@@ -370,7 +373,7 @@ function copyEntries(key, st, hist, byBase, now, skip) {
     const cb = E.cleanBase(p.base);
     if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { pass(p, 'już ma otwartą pozycję na tym coinie'); continue; }
     const L = p.dir === 'LONG';
-    const base = { id: `${now}-${live.sym}`, pickId: p.id, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
+    const base = { id: `${now}-${live.sym}`, pickId: p.id, pickT: p.t, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
       spreadPct: live.bid > 0 && live.ask > 0 ? +((live.ask - live.bid) / live.price * 100).toFixed(3) : null };
     if (p.ex !== 'bingx') {
       // scenariusz z innej giełdy (Binance/OKX): ceny różnią się między giełdami, więc wejście po cenie BingX,
