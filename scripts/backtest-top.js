@@ -21,12 +21,13 @@ const REV = MODE === 'reversal';
 const TREND = MODE === 'trend';
 const PUMP = MODE === 'pumpfade';
 const PULL = MODE === 'pullback' || MODE === 'pullbacklimit';
+const FH = MODE === 'fh';               // fh: konta F (kopia aplikacji, cel 2:1) i H (to samo + ciągnięcie zysku) – portfel, ROI miesięczne
 const EACCT = MODE === 'eacct';           // eacct: symulacja całego konta E (24 godz. najlepszy układ + trend dzienny), tylko IV=1h          // pullback: short na odbiciu do EMA20 w trendzie spadkowym przy słabnącym wolumenie (long lustrzanie)          // pumpfade: short na coinach po dużym wystrzale, które już spadają od szczytu            // trend: wybicie z kanału + ciągnięty stop (bez stałego celu)          // reversal: reguła „odwrócenie trendu” (bez modelu), jak planowane konto F          // exits: porównanie sposobów zamykania pozycji (cel / stop na wejście / ciągnięcie zysku)            // auto: model sam wybiera układ (2:1, 1:1, 1:2) dla każdego scenariusza
-const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP || PULL || EACCT ? 'big' : MODE]; // [cel, stop] w ATR
+const LEV = LEVS[AUTO || EXITS || REV || TREND || PUMP || PULL || EACCT || FH ? 'big' : MODE]; // [cel, stop] w ATR
 // model jak w aplikacji dla danego horyzontu
 const PROD = { '1h': 'mtfbtc', '4h': 'btc', '1d': 'btc', '30d': 'base' }[IV];
 const RW = LEV[0] / LEV[1];                 // ile R daje trafiony cel
-const VALID_N = 1000, REFIT = 200, BE = LEV[1] / (LEV[0] + LEV[1]);
+const VALID_N = +(process.env.VALID_N || 1000), REFIT = 200, BE = LEV[1] / (LEV[0] + LEV[1]);
 
 // ---------- Wątek: dane i predykcje per coin ----------
 function features(k, ctx, k4) {
@@ -257,6 +258,16 @@ async function worker() {
         recs[name] = { L: walk(Z, Y.L, lL, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })), S: walk(Z, Y.S, lS, H, l2, bAt).map(r => ({ ...r, t: k.t[r.i] })) };
         return { Y, lL, lS };
       };
+      if (FH) {
+        const f = features(k, btcCtx, k4); const raw = f.raw, n = k.c.length; const cand = [];
+        run(PROD, f.Z, raw, 0.3, LEV);
+        for (const side of ['L', 'S']) for (const r of recs[PROD][side]) {
+          const rw = raw[r.i]; if (!rw || !(rw.atr > 0)) continue;
+          const a = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, false), b = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, true);
+          cand.push({ side, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP });
+        }
+        parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { fh: cand }, pool: null }); continue;
+      }
       if (EACCT) {
         const f = features(k, btcCtx, k4); const raw = f.raw, n = k.c.length; const cand = [];
         for (const ly of ['big', 'equal', 'safe']) {
@@ -488,6 +499,51 @@ async function main() {
   console.log(`Policzone coiny: ${coins.length} (${((Date.now() - t0) / 60000).toFixed(1)} min)`);
 
   if (AUTO) return autoReport(coins, H, t0);
+  if (FH) {
+    const liftMin = E.liftMin ? E.liftMin(IV) : 0.08, MINSTOP = (E.MIN_STOP_PCT || 1.3) / 100;
+    const byT = new Map();
+    for (const c of coins) for (const x of c.recs.fh || []) {
+      const lift = x.p - x.prior;
+      if (!(x.rskill !== null && x.rskill >= 0.01 && x.p > BE + 0.02 && lift >= liftMin && x.sf >= MINSTOP)) continue;
+      if (!byT.has(x.t)) byT.set(x.t, new Map()); const m = byT.get(x.t), prev = m.get(c.coin);
+      if (!prev || lift > prev.lift) m.set(c.coin, { ...x, lift, coin: c.coin });
+    }
+    const picks = []; const blocked = new Map();
+    for (const t of [...byT.keys()].sort((a, b) => a - b)) { let n = 0;
+      for (const x of [...byT.get(t).values()].sort((a, b) => b.lift - a.lift)) { if (n >= 10) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); n++; picks.push(x); } }
+    const fhSim = (P, which, from, to) => {
+      const ev = P.filter(x => x.t >= from && x.t <= to).sort((a, b) => a.t - b.t);
+      let bal = 1000, open = [], day = '', dayStart = bal, halted = false, peak = bal, dd = 0; const trades = [], curve = [[from, bal]];
+      const closeUntil = t => { open.sort((a, b) => a.end - b.end); while (open.length && open[0].end <= t) { const o = open.shift(); bal += o.risk * o.R; trades.push(o); curve.push([o.end, bal]); peak = Math.max(peak, bal); dd = Math.max(dd, (peak - bal) / peak); } };
+      for (const x of ev) {
+        closeUntil(x.t);
+        const d = new Date(x.t + 36e5).toISOString().slice(0, 10); if (d !== day) { day = d; dayStart = bal; halted = false; }
+        if (!halted && (dayStart - bal) / dayStart >= 0.06) halted = true;
+        if (halted || open.length >= 10 || open.some(o => o.coin === x.coin)) continue;
+        if (open.reduce((a, o) => a + o.risk, 0) + bal * 0.01 > bal * 0.10) continue;
+        open.push({ coin: x.coin, side: x.side, R: which === 'F' ? x.RF : x.RH, end: which === 'F' ? x.eF : x.eH, risk: bal * 0.01, t: x.t });
+      }
+      closeUntil(Infinity);
+      const months = (to - from) / (30 * 864e5), mret = [];
+      for (let m0 = from; m0 + 30 * 864e5 <= to + 864e5; m0 += 30 * 864e5) {
+        const at = tt => { let v = 1000; for (const [ct, b] of curve) { if (ct <= tt) v = b; else break; } return v; };
+        mret.push((at(m0 + 30 * 864e5) / at(m0) - 1) * 100);
+      }
+      const w = trades.filter(o => o.R > 0).length, avR = trades.reduce((a, o) => a + o.R, 0) / (trades.length || 1);
+      const geo = (Math.pow(bal / 1000, 1 / months) - 1) * 100;
+      return { n: trades.length, win: w / (trades.length || 1), avR, bal, geo, dd: dd * 100, months, mret };
+    };
+    const from = Math.min(...picks.map(x => x.t)), to = Math.max(...picks.map(x => x.t));
+    console.log(`\n=== F (kopia aplikacji 2:1) vs H (kopia + ciągnięcie zysku) · horyzont ${IV} · ${coins.length} coinów · ${picks.length} zielonych scenariuszy ===`);
+    console.log(`Okres: ${new Date(from).toISOString().slice(0, 10)} – ${new Date(to).toISOString().slice(0, 10)} · start 1000 $, ryzyko 1% na pozycję (procent składany), maks. 10 pozycji, 1 na coin, łączne ryzyko ≤10%, dzienny limit straty 6%, koszty 0,1%/stronę`);
+    for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) {
+      for (const w of ['F', 'H']) { const r = fhSim(picks, w, a, b);
+        console.log(`${lbl.padEnd(16)} ${w}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
+    }
+    const zlib = require('zlib');
+    console.log('FHDATA:' + zlib.gzipSync(JSON.stringify(picks.map(x => [x.coin, x.side, x.t, +x.RF.toFixed(3), +x.RH.toFixed(3), x.eF, x.eH, +x.lift.toFixed(3)]))).toString('base64'));
+    console.log(`\nCzas: ${((Date.now() - t0) / 60000).toFixed(1)} min`); return;
+  }
   if (EACCT) {
     const RW = { big: 2, equal: 1, safe: 0.5 }, BEL = { big: 1 / 3, equal: 0.5, safe: 2 / 3 };
     const ev = x => { const c = 0.002 / x.stopFrac; return x.p * (RW[x.ly] - c) - (1 - x.p) * (1 + c); };
