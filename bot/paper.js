@@ -50,7 +50,7 @@ const ACCOUNTS = {
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true },
   H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true },
-  I: { name: 'Trader – sam szuka potwierdzeń', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1), a bot sam ocenia wykres jak trader. Wchodzi dopiero, gdy w ciągu 3 godzin cena wybije szczyt (dołek) 2 ostatnich świec, zanim dotknie stopu, i gdy zbierze co najmniej 2 z 5 punktów: nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw. Stop i cel jak w scenariuszu. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true },
+  I: { name: 'Trader – sam szuka potwierdzeń', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1), a bot sam ocenia wykres jak trader. Wchodzi dopiero, gdy w ciągu 3 godzin cena wybije szczyt (dołek) 2 ostatnich świec, zanim dotknie stopu, i gdy zbierze co najmniej 2 z 5 punktów: nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw. Stop i cel jak w scenariuszu; po dojściu do celu nie zamyka – połowa drogi do celu zostaje zabezpieczona, a stop idzie za ceną (1R za najlepszym poziomem), pozycja do 48 godz. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
@@ -152,7 +152,9 @@ function settle(p, bars, now) {
     } else if (p.trail && !entryBar) {
       p.best = L ? Math.max(p.best || p.entry, b.h) : Math.min(p.best || p.entry, b.l);
       if (L ? p.best >= p.target : p.best <= p.target) {
-        const ns = L ? p.best - p.rDist : p.best + p.rDist;
+        let ns = L ? p.best - p.rDist : p.best + p.rDist;
+        // konto I: po celu co najmniej połowa drogi do celu zostaje zabezpieczona
+        if (p.lockHalf) ns = L ? Math.max(ns, p.entry + (p.lockHalf - p.entry) * 0.5) : Math.min(ns, p.entry - (p.entry - p.lockHalf) * 0.5);
         if (L ? ns > p.stop : ns < p.stop) { p.stop = ns; p.trailing = true; }
       }
     }
@@ -335,9 +337,10 @@ function copyOpen(st, o, entry, t, byBase, key) {
   if (room <= eqNow * 0.05) return 'limit dźwigni';
   if (qty * entry > room) qty = room / entry;
   if (!(qty > 0) || !isFinite(qty)) return 'zła wielkość pozycji';
-  const ext = A.trail && o.pickT ? Math.max(0, o.end - o.pickT) : 0;
+  const ext = A.trail && o.pickT ? Math.max(0, o.end - o.pickT) : A.trader ? TR.H : 0;
   const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: o.mode || (A.trail ? 'copytrail' : 'copy'), openedAt: t, end: o.end + ext,
     ...(A.trail ? { trail: true, rDist: dist, best: entry } : {}),
+    ...(A.trader ? { trail: true, rDist: dist, best: entry, lockHalf: o.target } : {}),
     entry, qty, target: o.target, stop: o.stop, p: o.p || 0, ev: 0, lift: o.lift || 0, costR: +(costPerUnit(entry) / dist).toFixed(3),
     checkedTo: t, method: BASE.method, appPrice: o.limit, pickId: o.pickId, fillType: o.fillType || 'limit', spreadPct: o.spreadPct ?? null };
   pos.risk = openRisk(pos);
@@ -405,7 +408,7 @@ function copyEntries(key, st, hist, byBase, now, skip) {
 }
 
 // ---------- konto I: trader – model podsuwa, bot sam potwierdza ----------
-const TR = { lift: 0.05, top: 20, minScore: 2, watchMs: 3 * 36e5, H: 24 * 36e5, minRR: 1.2 };
+var TR = { lift: 0.05, top: 20, minScore: 2, watchMs: 3 * 36e5, H: 24 * 36e5, minRR: 1.2 };
 const rrAt = (w, e) => Math.abs(w.target - e) / Math.abs(e - w.stop);
 // kandydaci: 24 godz., układ 2:1, p > próg + 2 pkt, skill ≥ 1%, przewaga ≥ 5 pkt, stop ≥ 1,3%, bez ostrzeżeń
 function traderCandidates(res, now) {
@@ -462,7 +465,7 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
       w.checked = b.t + b.dur;
     }
     if (done && done.fill) {
-      const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader 2:1', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓, ${w.scoreTxt}`, limit: w.lvl }, done.fill, done.t, byBase, key);
+      const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader + ciągnięcie zysku', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓, ${w.scoreTxt}`, limit: w.lvl }, done.fill, done.t, byBase, key);
       if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`);
       st.watch = st.watch.filter(x => x !== w); continue;
     }
@@ -478,7 +481,7 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
       // wybicie już nastąpiło (cena za poziomem w chwili oceny) → wejście od razu po cenie rynkowej, o ile zostaje ≥ 1,2R do celu
       if (live && live.price > 0 && (L ? live.price >= w.lvl : live.price <= w.lvl)) {
         const fp = fill(live.price, w.side, true); w.scoreTxt = `${s.sc}/5: ${s.txt}`;
-        if (rrAt(w, fp) >= TR.minRR) { const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader 2:1', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓ (już nastąpiło), ${w.scoreTxt}`, limit: w.lvl }, fp, now, byBase, key);
+        if (rrAt(w, fp) >= TR.minRR) { const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader + ciągnięcie zysku', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓ (już nastąpiło), ${w.scoreTxt}`, limit: w.lvl }, fp, now, byBase, key);
           if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`); }
         else st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): cena już za daleko za poziomem wybicia (zostało tylko ${rrAt(w, fp).toFixed(1)}R do celu)`);
         st.watch = st.watch.filter(x => x !== w); continue;

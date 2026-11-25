@@ -329,10 +329,14 @@ test('konto I: obserwuje scenariusz, wchodzi dopiero po wybiciu szczytu, stop i 
     { t: now + 15 * 6e4, dur: M5, o: last, h: lvl * 1.001, l: last * 0.999, c: lvl },
     { t: now + 30 * 6e4, dur: M5, o: lvl, h: last * 1.045, l: lvl * 0.999, c: last * 1.04 }];
   await B.runAccount('I', st, r, byBase, async () => bars, now + H);
-  assert.strictEqual(st.closed.length, 1);
-  assert.strictEqual(st.closed[0].reason, 'cel');
-  assert.ok(Math.abs(st.closed[0].entry - lvl) < 1e-9);
+  // po celu pozycja trwa dalej (ciągnięcie zysku), stop zabezpiecza co najmniej połowę drogi do celu
+  assert.strictEqual(st.closed.length, 0);
+  const pp = st.positions[0]; assert.ok(pp.trailing && pp.stop >= pp.entry + (pp.lockHalf - pp.entry) * 0.5 - 1e-9);
+  assert.ok(Math.abs(pp.entry - lvl) < 1e-9);
   assert.ok(st.log.some(l => /otwarto TTT LONG .*wybicie .*✓/.test(l)));
+  // cofnięcie → wyjście na ciągniętym stopie z zyskiem
+  await B.runAccount('I', st, r, byBase, async () => [{ t: now + H + 10 * 6e4, dur: M5, o: last * 1.04, h: last * 1.041, l: last * 1.0, c: last * 1.0 }], now + 2 * H);
+  assert.strictEqual(st.closed.length, 1); assert.strictEqual(st.closed[0].reason, 'ciągnięty stop'); assert.ok(st.closed[0].net > 0);
 });
 test('konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
   const now = Date.UTC(2026, 10, 25, 10, 20);
