@@ -6,6 +6,12 @@ on:
       iv:
         description: 'Horyzont: 1h (24 godz.), 4h (3 dni), 1d (14 dni), 30d (30 dni)'
         default: '1h'
+      fh_lift:
+        description: 'Tryb fh: minimalna przewaga (0.08 jak aplikacja)'
+        default: '0.08'
+      fh_top:
+        description: 'Tryb fh: ile scenariuszy na skan (10 jak aplikacja)'
+        default: '10'
       mode:
         description: 'Układ: big (2:1), equal (1:1), equal15 (1:1 bliżej), safe (1:2), auto (model sam wybiera), exits (sposoby zamykania)'
         default: 'big'
@@ -23,5 +29,7 @@ jobs:
         env:
           IV: ${{ github.event.inputs.iv }}
           MODE: ${{ github.event.inputs.mode }}
+          FH_LIFT: ${{ github.event.inputs.fh_lift }}
+          FH_TOP: ${{ github.event.inputs.fh_top }}
           VALID_N: ${{ github.event.inputs.mode == 'fh' && '2000' || '1000' }}
         run: node scripts/backtest-top.js
