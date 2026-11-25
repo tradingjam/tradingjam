@@ -237,6 +237,28 @@ function tradeSim(k, i, atr, lev, long, H, trail) {
   if (R === null) { j = maxJ; R = (long ? k.c[j] - e : e - k.c[j]) / st; }
   return { R: R - 0.002 * e / st, bars: j - i, stopFrac: st / e };
 }
+// Wejście z potwierdzeniem: poziomy stopu i celu zostają jak w aplikacji (liczone od ceny sygnału), ale bot wchodzi
+// dopiero gdy wykres potwierdzi kierunek; jeśli wcześniej cena dotknie stopu albo minie czas na potwierdzenie – brak wejścia.
+// rule 'green': następna świeca 1h zamyka się w kierunku scenariusza (wejście na jej zamknięciu)
+// rule 'break': cena wybija szczyt (dołek) świecy sygnału w ciągu 3 świec (wejście po cenie wybicia)
+// rule 'hold2': 2 świece bez nowego dołka (szczytu) poniżej ceny sygnału, wejście na zamknięciu drugiej
+function confirmSim(k, i, atr, lev, long, H, rule) {
+  const n = k.c.length, e0 = k.c[i], st = lev[1] * atr, tg = lev[0] * atr;
+  const stop = long ? e0 - st : e0 + st, target = long ? e0 + tg : e0 - tg;
+  let j0 = null, e = null;
+  if (rule === 'green') { const j = i + 1; if (j < n && (long ? k.l[j] > stop : k.h[j] < stop) && (long ? k.c[j] > k.o[j] && k.c[j] > e0 : k.c[j] < k.o[j] && k.c[j] < e0)) { j0 = j; e = k.c[j]; } }
+  if (rule === 'break') { const lvl = long ? k.h[i] : k.l[i]; for (let j = i + 1; j <= Math.min(n - 1, i + 3); j++) { if (long ? k.l[j] <= stop : k.h[j] >= stop) break; if (long ? k.h[j] >= lvl : k.l[j] <= lvl) { j0 = j; e = long ? Math.max(lvl, k.o[j]) : Math.min(lvl, k.o[j]); break; } } }
+  if (rule === 'hold2') { let ok = true; for (let j = i + 1; j <= i + 2; j++) { if (j >= n || (long ? k.l[j] < e0 - 0.3 * st : k.h[j] > e0 + 0.3 * st)) { ok = false; break; } } if (ok && i + 2 < n) { j0 = i + 2; e = k.c[i + 2]; } }
+  if (j0 === null) return null;
+  if (long ? (e >= target || e <= stop) : (e <= target || e >= stop)) return null;
+  const risk = Math.abs(e - stop); let R = null, j; const maxJ = Math.min(n - 1, i + H);
+  for (j = j0 + (rule === 'break' ? 0 : 1); j <= maxJ; j++) {
+    if (long ? k.l[j] <= stop : k.h[j] >= stop) { R = -(Math.abs(e - (long ? Math.min(stop, j === j0 ? stop : k.o[j]) : Math.max(stop, j === j0 ? stop : k.o[j])))) / risk; break; }
+    if (j > j0 && (long ? k.h[j] >= target : k.l[j] <= target)) { R = Math.abs(target - e) / risk; break; }
+  }
+  if (R === null) { j = maxJ; R = (long ? k.c[j] - e : e - k.c[j]) / risk; }
+  return { R: R - 0.002 * e / risk, bars: j - i, stopFrac: risk / e };
+}
 async function worker() {
   const H = E.CFG[IV].H; const btcCtx = E.btcContext(workerData.btc);
   // trend BTC (odległość od EMA50 w ATR) w chwili danej świecy coina
@@ -264,7 +286,8 @@ async function worker() {
         for (const side of ['L', 'S']) for (const r of recs[PROD][side]) {
           const rw = raw[r.i]; if (!rw || !(rw.atr > 0)) continue;
           const a = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, false), b = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, true);
-          cand.push({ side, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP });
+          const cf = {}; for (const rule of ['green', 'break', 'hold2']) { const c = confirmSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, rule); cf[rule] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
+          cand.push({ side, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
         }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { fh: cand }, pool: null }); continue;
       }
@@ -521,7 +544,10 @@ async function main() {
         if (!halted && (dayStart - bal) / dayStart >= 0.06) halted = true;
         if (halted || open.length >= 10 || open.some(o => o.coin === x.coin)) continue;
         if (open.reduce((a, o) => a + o.risk, 0) + bal * 0.01 > bal * 0.10) continue;
-        open.push({ coin: x.coin, side: x.side, R: which === 'F' ? x.RF : x.RH, end: which === 'F' ? x.eF : x.eH, risk: bal * 0.01, t: x.t });
+        let R, end;
+        if (which === 'F') { R = x.RF; end = x.eF; } else if (which === 'H') { R = x.RH; end = x.eH; }
+        else { const c = x.cf && x.cf[which]; if (!c) continue; R = c[0]; end = c[1]; }
+        open.push({ coin: x.coin, side: x.side, R, end, risk: bal * 0.01, t: x.t });
       }
       closeUntil(Infinity);
       const months = (to - from) / (30 * 864e5), mret = [];
@@ -537,8 +563,8 @@ async function main() {
     console.log(`\n=== F (kopia aplikacji 2:1) vs H (kopia + ciągnięcie zysku) · horyzont ${IV} · ${coins.length} coinów · ${picks.length} zielonych scenariuszy ===`);
     console.log(`Okres: ${new Date(from).toISOString().slice(0, 10)} – ${new Date(to).toISOString().slice(0, 10)} · start 1000 $, ryzyko 1% na pozycję (procent składany), maks. 10 pozycji, 1 na coin, łączne ryzyko ≤10%, dzienny limit straty 6%, koszty 0,1%/stronę`);
     for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) {
-      for (const w of ['F', 'H']) { const r = fhSim(picks, w, a, b);
-        console.log(`${lbl.padEnd(16)} ${w}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
+      for (const w of ['F', 'H', 'green', 'break', 'hold2']) { const r = fhSim(picks, w, a, b);
+        console.log(`${lbl.padEnd(16)} ${({ F: 'F bez potw.', H: 'H ciągnięcie', green: 'potw.: zielona świeca', break: 'potw.: wybicie szczytu', hold2: 'potw.: 2 świece bez spadku' })[w].padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
     }
     const zlib = require('zlib');
     console.log('FHDATA:' + zlib.gzipSync(JSON.stringify(picks.map(x => [x.coin, x.side, x.t, +x.RF.toFixed(3), +x.RH.toFixed(3), x.eF, x.eH, +x.lift.toFixed(3)]))).toString('base64'));
