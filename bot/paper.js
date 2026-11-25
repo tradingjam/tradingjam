@@ -405,7 +405,8 @@ function copyEntries(key, st, hist, byBase, now, skip) {
 }
 
 // ---------- konto I: trader – model podsuwa, bot sam potwierdza ----------
-const TR = { lift: 0.05, top: 20, minScore: 2, watchMs: 3 * 36e5, H: 24 * 36e5 };
+const TR = { lift: 0.05, top: 20, minScore: 2, watchMs: 3 * 36e5, H: 24 * 36e5, minRR: 1.2 };
+const rrAt = (w, e) => Math.abs(w.target - e) / Math.abs(e - w.stop);
 // kandydaci: 24 godz., układ 2:1, p > próg + 2 pkt, skill ≥ 1%, przewaga ≥ 5 pkt, stop ≥ 1,3%, bez ostrzeżeń
 function traderCandidates(res, now) {
   const out = [];
@@ -451,9 +452,12 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
     const L = w.side === 'LONG'; let done = null;
     const bars = (await barsFor(w.sym)) || [];
     for (const b of bars) {
-      if (b.t < (w.checked || w.sigT) || b.t + b.dur > now) continue;
-      const armed = w.armedAt && b.t >= w.armedAt && b.t < w.armedUntil;
-      if (armed && (L ? b.h >= w.lvl : b.l <= w.lvl)) { done = { fill: L ? Math.max(w.lvl, b.o) : Math.min(w.lvl, b.o), t: b.t + 1 }; break; }
+      if (b.t + b.dur <= (w.checked || w.sigT) || b.t + b.dur > now) continue;
+      // świeca, w której uzbrojono zlecenie, liczy się, jeśli w chwili uzbrojenia cena była jeszcze przed poziomem wybicia
+      const armed = w.armedAt && b.t < w.armedUntil && (b.t >= w.armedAt || (b.t + b.dur > w.armedAt && w.armPrice && (L ? w.armPrice < w.lvl : w.armPrice > w.lvl)));
+      if (armed && (L ? b.h >= w.lvl : b.l <= w.lvl)) {
+        const fp = b.t >= w.armedAt ? (L ? Math.max(w.lvl, b.o) : Math.min(w.lvl, b.o)) : w.lvl;
+        done = rrAt(w, fp) >= TR.minRR ? { fill: fp, t: Math.max(b.t, w.armedAt) + 1 } : { cancel: `cena przeskoczyła za daleko za poziom wybicia (zostało tylko ${rrAt(w, fp).toFixed(1)}R do celu)` }; break; }
       if (L ? b.l <= w.stop : b.h >= w.stop) { done = { cancel: 'cena dotknęła stopu przed wybiciem' }; break; }
       w.checked = b.t + b.dur;
     }
@@ -469,7 +473,17 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
     if (!k) continue;
     const q = closedIdx(k, now); if (q < 25) continue;
     const s = traderScore(k, k4, q, L); w.lastTxt = `${s.sc}/5: ${s.txt}`;
-    if (s.sc >= TR.minScore) { const was = !!(w.armedUntil && w.armedUntil > now - 6e4); w.armedAt = now; w.armedUntil = Math.min(w.expires, now + 36e5); w.scoreTxt = `${s.sc}/5: ${s.txt}`;
+    if (s.sc >= TR.minScore) {
+      const live = byBase.get(E.cleanBase(w.base));
+      // wybicie już nastąpiło (cena za poziomem w chwili oceny) → wejście od razu po cenie rynkowej, o ile zostaje ≥ 1,2R do celu
+      if (live && live.price > 0 && (L ? live.price >= w.lvl : live.price <= w.lvl)) {
+        const fp = fill(live.price, w.side, true); w.scoreTxt = `${s.sc}/5: ${s.txt}`;
+        if (rrAt(w, fp) >= TR.minRR) { const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader 2:1', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓ (już nastąpiło), ${w.scoreTxt}`, limit: w.lvl }, fp, now, byBase, key);
+          if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`); }
+        else st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): cena już za daleko za poziomem wybicia (zostało tylko ${rrAt(w, fp).toFixed(1)}R do celu)`);
+        st.watch = st.watch.filter(x => x !== w); continue;
+      }
+      const was = !!(w.armedUntil && w.armedUntil > now - 6e4); w.armedAt = now; w.armedUntil = Math.min(w.expires, now + 36e5); w.scoreTxt = `${s.sc}/5: ${s.txt}`; w.armPrice = live ? live.price : null;
       if (!was) st.log.unshift(`${stamp(now)} czeka na wybicie ${w.base} ${w.side} ${L ? 'powyżej' : 'poniżej'} ${w.lvl.toPrecision(5)} (${w.scoreTxt})`); }
     else { w.armedAt = null; w.armedUntil = null; }
   }

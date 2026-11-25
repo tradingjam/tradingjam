@@ -346,3 +346,16 @@ test('konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
   assert.strictEqual(st.positions.length + st.closed.length + st.watch.length, 0);
   assert.ok(st.log[0].includes('dotknęła stopu przed wybiciem'));
 });
+test('konto I: nie wchodzi, gdy cena przeskoczy wybicie tak daleko, że do celu zostaje < 1,2R', async () => {
+  const now = Date.UTC(2026, 10, 25, 10, 20);
+  const k = upK(now); const last = k.c[k.c.length - 1];
+  const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
+  const r = { generatedAt: new Date(now).toISOString(), coins: [coin], klines1h: async () => k, klines4h: async () => null };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['TTT', { price: last, qv: 1e7, sym: 'TTT-USDT' }]]);
+  await B.runAccount('I', st, r, byBase, async () => [], now);
+  // świeca otwiera się od razu +3% (cel +4%, stop −2%) → zostaje ok. 0,2R
+  await B.runAccount('I', st, r, byBase, async () => [{ t: now + 10 * 6e4, dur: M5, o: last * 1.03, h: last * 1.032, l: last * 1.029, c: last * 1.031 }], now + H);
+  assert.strictEqual(st.positions.length + st.closed.length, 0);
+  assert.ok(st.log.some(l => l.includes('przeskoczyła za daleko')));
+});
