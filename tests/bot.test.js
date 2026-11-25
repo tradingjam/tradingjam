@@ -306,3 +306,43 @@ test('konto H: kopia aplikacji, po celu ciągnie zysk zamiast zamykać', async (
   assert.strictEqual(st.closed[0].reason, 'ciągnięty stop');
   assert.ok(st.closed[0].r > 1.7, 'R ' + st.closed[0].r);
 });
+
+// ---------- konto I: trader ----------
+function upK(now) {
+  const k = { t: [], o: [], h: [], l: [], c: [], v: [] }; let p = 80; const N = 60, t0 = Math.floor(now / H) * H - N * H;
+  for (let i = 0; i < N; i++) { const o = p, c = p * (1.004 + 0.002 * Math.sin(i)); k.t.push(t0 + i * H); k.o.push(o); k.c.push(c); k.h.push(c * 1.002); k.l.push(o * 0.998); k.v.push(100 + i); p = c; }
+  return k;
+}
+test('konto I: obserwuje scenariusz, wchodzi dopiero po wybiciu szczytu, stop i cel ze scenariusza', async () => {
+  const now = Date.UTC(2026, 10, 25, 10, 20);
+  const k = upK(now); const last = k.c[k.c.length - 1]; const lvl = Math.max(k.h[k.h.length - 1], k.h[k.h.length - 2]);
+  const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
+  const r = { generatedAt: new Date(now).toISOString(), coins: [coin], klines1h: async () => k, klines4h: async () => null };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['TTT', { price: last, qv: 1e7, sym: 'TTT-USDT' }]]);
+  await B.runAccount('I', st, r, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 0);
+  assert.strictEqual(st.watch.length, 1);
+  assert.ok(st.watch[0].armedAt, 'uzbrojony (≥2/5): ' + st.watch[0].lastTxt);
+  // 5m: najpierw bez wybicia, potem wybicie lvl, potem cel
+  const bars = [{ t: now + 5 * 6e4, dur: M5, o: last, h: last * 1.0005, l: last * 0.999, c: last },
+    { t: now + 15 * 6e4, dur: M5, o: last, h: lvl * 1.001, l: last * 0.999, c: lvl },
+    { t: now + 30 * 6e4, dur: M5, o: lvl, h: last * 1.045, l: lvl * 0.999, c: last * 1.04 }];
+  await B.runAccount('I', st, r, byBase, async () => bars, now + H);
+  assert.strictEqual(st.closed.length, 1);
+  assert.strictEqual(st.closed[0].reason, 'cel');
+  assert.ok(Math.abs(st.closed[0].entry - lvl) < 1e-9);
+  assert.ok(st.log.some(l => /otwarto TTT LONG .*wybicie .*✓/.test(l)));
+});
+test('konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
+  const now = Date.UTC(2026, 10, 25, 10, 20);
+  const k = upK(now); const last = k.c[k.c.length - 1];
+  const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
+  const r = { generatedAt: new Date(now).toISOString(), coins: [coin], klines1h: async () => k, klines4h: async () => null };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['TTT', { price: last, qv: 1e7, sym: 'TTT-USDT' }]]);
+  await B.runAccount('I', st, r, byBase, async () => [], now);
+  await B.runAccount('I', st, r, byBase, async () => [{ t: now + 10 * 6e4, dur: M5, o: last, h: last * 1.0001, l: last * 0.975, c: last * 0.976 }], now + H);
+  assert.strictEqual(st.positions.length + st.closed.length + st.watch.length, 0);
+  assert.ok(st.log[0].includes('dotknęła stopu przed wybiciem'));
+});

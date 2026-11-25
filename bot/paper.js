@@ -1,4 +1,4 @@
-// Bot „na sucho” (paper trading) – osiem WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
+// Bot „na sucho” (paper trading) – dziewięć WIRTUALNYCH kont po 1000 USDT, prawdziwe ceny BingX.
 // Co godzinę, po skanie: rozlicza pozycje (cel / stop / koniec czasu) i otwiera nowe.
 // Konta różnią się tylko sposobem wyboru scenariuszy – żeby na żywo sprawdzić, co najlepiej mnoży kapitał:
 //   A „Duży zysk 2:1”        – zielone scenariusze w układzie 2:1
@@ -50,6 +50,7 @@ const ACCOUNTS = {
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true },
   H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true },
+  I: { name: 'Trader – sam szuka potwierdzeń', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1), a bot sam ocenia wykres jak trader. Wchodzi dopiero, gdy w ciągu 3 godzin cena wybije szczyt (dołek) 2 ostatnich świec, zanim dotknie stopu, i gdy zbierze co najmniej 2 z 5 punktów: nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw. Stop i cel jak w scenariuszu. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
@@ -335,13 +336,13 @@ function copyOpen(st, o, entry, t, byBase, key) {
   if (qty * entry > room) qty = room / entry;
   if (!(qty > 0) || !isFinite(qty)) return 'zła wielkość pozycji';
   const ext = A.trail && o.pickT ? Math.max(0, o.end - o.pickT) : 0;
-  const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: A.trail ? 'copytrail' : 'copy', openedAt: t, end: o.end + ext,
+  const pos = { id: `${t}-${o.sym}`, base: o.base, sym: o.sym, side: o.side, iv: o.iv, mode: o.mode || (A.trail ? 'copytrail' : 'copy'), openedAt: t, end: o.end + ext,
     ...(A.trail ? { trail: true, rDist: dist, best: entry } : {}),
     entry, qty, target: o.target, stop: o.stop, p: o.p || 0, ev: 0, lift: o.lift || 0, costR: +(costPerUnit(entry) / dist).toFixed(3),
     checkedTo: t, method: BASE.method, appPrice: o.limit, pickId: o.pickId, fillType: o.fillType || 'limit', spreadPct: o.spreadPct ?? null };
   pos.risk = openRisk(pos);
   st.positions.push(pos);
-  st.log.unshift(`${stamp(t)} otwarto ${o.base} ${o.side} (${IV_LABEL[o.iv] || o.iv}, ${A.trail ? 'kopia + ciągnięcie zysku' : 'kopia aplikacji 2:1'}) po ${entry.toPrecision(5)}${pos.fillType === 'limit' ? ' (zlecenie z limitem)' : ''}`);
+  st.log.unshift(`${stamp(t)} otwarto ${o.base} ${o.side} (${IV_LABEL[o.iv] || o.iv}, ${o.label || (A.trail ? 'kopia + ciągnięcie zysku' : 'kopia aplikacji 2:1')}) po ${entry.toPrecision(5)}${pos.fillType === 'limit' ? ' (zlecenie z limitem)' : ''}${o.why ? ' – ' + o.why : ''}`);
   return pos;
 }
 // 0. czekające zlecenia z limitem: wykonane → pozycja, po czasie → anulowane
@@ -403,6 +404,102 @@ function copyEntries(key, st, hist, byBase, now, skip) {
   return opened;
 }
 
+// ---------- konto I: trader – model podsuwa, bot sam potwierdza ----------
+const TR = { lift: 0.05, top: 20, minScore: 2, watchMs: 3 * 36e5, H: 24 * 36e5 };
+// kandydaci: 24 godz., układ 2:1, p > próg + 2 pkt, skill ≥ 1%, przewaga ≥ 5 pkt, stop ≥ 1,3%, bez ostrzeżeń
+function traderCandidates(res, now) {
+  const out = [];
+  for (const co of res.coins || []) {
+    const a = co.res && co.res['1h']; if (!a || a.error || a.regime || !a.big) continue;
+    if ((E.isExtreme && E.isExtreme(co)) || (E.isIlliquid && E.isIlliquid(co))) continue;
+    let best = null;
+    for (const side of ['long', 'short']) {
+      const d = E.dirOf(a, 'big', side); if (!d || d.p === null || d.weak || d.tooWide) continue;
+      const lift = d.p - d.hist;
+      if (!(d.p > 1 / 3 + 0.02 && (d.skill || 0) >= 0.01 && lift >= TR.lift && Math.abs(d.stopPct) >= E.MIN_STOP_PCT)) continue;
+      if (!best || lift > best.lift) best = { co, a, d, lift };
+    }
+    if (best) out.push(best);
+  }
+  return out.sort((x, y) => y.lift - x.lift).slice(0, TR.top);
+}
+// punkty potwierdzenia na ostatniej ZAMKNIĘTEJ świecy 1h (q); k4 – świece 4h do trendu
+function traderScore(k, k4, q, long) {
+  const c = k.c, a = 2 / 21, ema = [c[0]], rsi = new Array(c.length).fill(50); let g = 0, l = 0;
+  for (let i = 1; i < c.length; i++) { ema.push(ema[i - 1] + a * (c[i] - ema[i - 1])); const d = c[i] - c[i - 1], u = Math.max(d, 0), dn = Math.max(-d, 0);
+    if (i <= 14) { g += u / 14; l += dn / 14; } else { g = (g * 13 + u) / 14; l = (l * 13 + dn) / 14; } if (i >= 14) rsi[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); }
+  const recent = long ? Math.min(k.l[q], k.l[q - 1]) : Math.max(k.h[q], k.h[q - 1]); let ext = recent;
+  for (let m = q - 23; m <= q - 2; m++) if (m >= 0) ext = long ? Math.min(ext, k.l[m]) : Math.max(ext, k.h[m]);
+  let vav = 0; for (let m = q - 19; m <= q; m++) vav += (k.v[Math.max(0, m)] || 0) / 20;
+  let t4ok = false, t4 = null;
+  if (k4 && k4.c.length > 25) { const e4 = [k4.c[0]]; for (let i = 1; i < k4.c.length; i++) e4.push(e4[i - 1] + a * (k4.c[i] - e4[i - 1])); const j = e4.length - 1; t4 = e4[j] - e4[j - 3]; t4ok = long ? t4 >= 0 : t4 <= 0; }
+  const ch = {
+    'nie nóż': long ? recent > ext : recent < ext,
+    [`RSI ${rsi[q].toFixed(0)}`]: long ? rsi[q] >= 40 && rsi[q] <= 75 && rsi[q] > rsi[q - 2] : rsi[q] <= 60 && rsi[q] >= 25 && rsi[q] < rsi[q - 2],
+    'EMA20': long ? c[q] > ema[q] : c[q] < ema[q],
+    [`wolumen ${vav > 0 ? (k.v[q] / vav).toFixed(1) : '?'}×`]: vav > 0 && k.v[q] >= vav,
+    'trend 4h': t4ok,
+  };
+  const sc = Object.values(ch).filter(Boolean).length;
+  return { sc, txt: Object.entries(ch).map(([n, v]) => `${n} ${v ? '✓' : '✗'}`).join(', ') };
+}
+const closedIdx = (k, now) => { let q = k.t.length - 1; while (q >= 0 && k.t[q] + 36e5 > now) q--; return q; };
+// 0. obserwowane scenariusze: wybicie (zlecenie stop wykonane na 5m), stop przed wybiciem, uzbrajanie na kolejną godzinę
+async function traderWatch(key, st, res, barsFor, byBase, now) {
+  st.watch = st.watch || [];
+  for (const w of [...st.watch]) {
+    const L = w.side === 'LONG'; let done = null;
+    const bars = (await barsFor(w.sym)) || [];
+    for (const b of bars) {
+      if (b.t < (w.checked || w.sigT) || b.t + b.dur > now) continue;
+      const armed = w.armedAt && b.t >= w.armedAt && b.t < w.armedUntil;
+      if (armed && (L ? b.h >= w.lvl : b.l <= w.lvl)) { done = { fill: L ? Math.max(w.lvl, b.o) : Math.min(w.lvl, b.o), t: b.t + 1 }; break; }
+      if (L ? b.l <= w.stop : b.h >= w.stop) { done = { cancel: 'cena dotknęła stopu przed wybiciem' }; break; }
+      w.checked = b.t + b.dur;
+    }
+    if (done && done.fill) {
+      const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader 2:1', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓, ${w.scoreTxt}`, limit: w.lvl }, done.fill, done.t, byBase, key);
+      if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`);
+      st.watch = st.watch.filter(x => x !== w); continue;
+    }
+    if (done && done.cancel) { st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${done.cancel}`); st.watch = st.watch.filter(x => x !== w); continue; }
+    if (now >= w.expires) { st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): brak potwierdzenia w 3 godz.${w.lastTxt ? ' (ostatnio: ' + w.lastTxt + ')' : ''}`); st.watch = st.watch.filter(x => x !== w); continue; }
+    // uzbrojenie na następną godzinę wg ostatniej zamkniętej świecy
+    let k = null, k4 = null; try { k = await res.klines1h(w.sym); k4 = res.klines4h ? await res.klines4h(w.sym) : null; } catch (e) { }
+    if (!k) continue;
+    const q = closedIdx(k, now); if (q < 25) continue;
+    const s = traderScore(k, k4, q, L); w.lastTxt = `${s.sc}/5: ${s.txt}`;
+    if (s.sc >= TR.minScore) { const was = !!(w.armedUntil && w.armedUntil > now - 6e4); w.armedAt = now; w.armedUntil = Math.min(w.expires, now + 36e5); w.scoreTxt = `${s.sc}/5: ${s.txt}`;
+      if (!was) st.log.unshift(`${stamp(now)} czeka na wybicie ${w.base} ${w.side} ${L ? 'powyżej' : 'poniżej'} ${w.lvl.toPrecision(5)} (${w.scoreTxt})`); }
+    else { w.armedAt = null; w.armedUntil = null; }
+  }
+}
+// 3. nowe scenariusze do obserwacji
+async function traderEntries(key, st, res, byBase, now, skip) {
+  st.watch = st.watch || []; st.seen = st.seen || {};
+  for (const [kk, until] of Object.entries(st.seen)) if (until <= now) delete st.seen[kk];
+  let added = 0;
+  for (const x of traderCandidates(res, now)) {
+    const cb = E.cleanBase(x.co.base), live = byBase.get(cb), L = x.d.dir === 'LONG', key2 = cb + x.d.dir;
+    if (st.seen[key2]) continue;
+    st.seen[key2] = now + TR.H;
+    if (!live || !(live.price > 0)) { skip('brak coina na BingX'); continue; }
+    if (st.positions.some(p => E.cleanBase(p.base) === cb) || st.watch.some(w => E.cleanBase(w.base) === cb)) { skip('już ma pozycję lub obserwuje ten coin'); continue; }
+    if (st.positions.length >= ACCOUNTS[key].maxOpen) { skip('maks. liczba pozycji'); continue; }
+    let k = null; try { k = await res.klines1h(live.sym); } catch (e) { }
+    if (!k) { skip('brak świec'); continue; }
+    const q = closedIdx(k, now); if (q < 25) { skip('za mało świec'); continue; }
+    const kx = live.price / x.a.price; // poziomy scenariusza w procentach, przeniesione na cenę BingX
+    const w = { base: x.co.base, sym: live.sym, side: x.d.dir, iv: '1h', sigT: now, expires: now + TR.watchMs, end: now + TR.H,
+      lvl: L ? Math.max(k.h[q], k.h[q - 1]) : Math.min(k.l[q], k.l[q - 1]), stop: x.d.stop * kx, target: x.d.target * kx, p: x.d.p, lift: x.lift, src: x.co.ex };
+    if (L ? !(w.stop < live.price && w.lvl < w.target) : !(w.stop > live.price && w.lvl > w.target)) { skip('poziomy poza zakresem'); continue; }
+    st.watch.push(w); added++;
+    st.log.unshift(`${stamp(now)} obserwuje ${w.base} ${w.side} (model ${(x.d.p * 100).toFixed(0)}%, przewaga +${(x.lift * 100).toFixed(0)} pkt) – czeka na potwierdzenie do 3 godz.`);
+  }
+  // od razu ocena i uzbrojenie świeżo dodanych (pierwsza godzina obserwacji)
+  return added;
+}
+
 async function runAccount(key, st, res, byBase, barsFor, now) {
   const riskPct = ACCOUNTS[key].riskPct || BASE.riskPct, maxOpen = ACCOUNTS[key].maxOpen || BASE.maxOpen;
   // 0. dzień (czas polski) – baza dnia = equity PRZED rozliczeniem tego skanu
@@ -411,6 +508,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   if (st.day.startEquity === undefined) st.day.startEquity = st.day.startBalance || st.balance; // stary format
   // 0b. konto F: wykonanie / wygaśnięcie zleceń z limitem (przed rozliczeniem – nowa pozycja rozlicza się od świecy wejścia)
   if (ACCOUNTS[key].copy) await copyFills(key, st, barsFor, byBase, now);
+  if (ACCOUNTS[key].trader) await traderWatch(key, st, res, barsFor, byBase, now);
   // 1. rozliczanie
   for (const p of [...st.positions]) {
     const bars = await barsFor(p.sym);
@@ -445,6 +543,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   }
   else if (st.observe) skip('tryb obserwacji');
   else if (ACCOUNTS[key].copy) opened = copyEntries(key, st, res.history, byBase, now, skip);
+  else if (ACCOUNTS[key].trader) { await traderEntries(key, st, res, byBase, now, skip); await traderWatch(key, st, res, async () => [], byBase, now); }
   else {
     const list = ACCOUNTS[key].ind ? await indCandidates(res, byBase, now) : candidates(key, res);
     for (const c of list) {
@@ -535,6 +634,8 @@ async function main() {
   // konto G: świece 1h z BingX (tylko dla wstępnie wybranych coinów)
   const k1Cache = new Map();
   res.klines1h = async sym => { if (!k1Cache.has(sym)) k1Cache.set(sym, await X.bingxKlines(sym, '1h', 120)); return k1Cache.get(sym); };
+  const k4Cache = new Map();
+  res.klines4h = async sym => { if (!k4Cache.has(sym)) k4Cache.set(sym, await X.bingxKlines(sym, '4h', 60)); return k4Cache.get(sym); };
   const logLen = Object.fromEntries(Object.keys(ACCOUNTS).map(k => [k, (state.accounts[k].log || []).length]));
   for (const key of Object.keys(ACCOUNTS)) console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, byBase, barsFor, now));
   state.updatedAt = now;
@@ -545,7 +646,7 @@ async function main() {
 // ---------- powiadomienia na Telegram (tylko gdy coś się wydarzyło) ----------
 // sekrety TELEGRAM_TOKEN i TELEGRAM_CHAT_ID ustawia właściciel w GitHubie; bez nich nic nie jest wysyłane
 const NOTICE_ICON = l => / otwarto .* LONG/.test(l) ? '🟢' : / otwarto .* SHORT/.test(l) ? '🔴' : / zamknięto .* \+/.test(l) ? '✅' : / zamknięto /.test(l) ? '❌'
-  : /zlecenie z limitem .* po .* \(cena teraz/.test(l) ? '⏳' : /wygasło|pominięte/.test(l) ? '⌛' : /pominięto/.test(l) ? '⚪' : '⚠️';
+  : /zlecenie z limitem .* po .* \(cena teraz/.test(l) ? '⏳' : /wygasło|pominięte/.test(l) ? '⌛' : /pominięto/.test(l) ? '⚪' : /obserwuje|czeka na wybicie/.test(l) ? '👀' : '⚠️';
 function buildNotice(state, logLen, now) {
   const out = [];
   for (const [k, a] of Object.entries(state.accounts)) {
@@ -567,4 +668,4 @@ async function sendTelegram(text) {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
