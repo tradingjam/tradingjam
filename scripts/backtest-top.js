@@ -274,7 +274,7 @@ function indArrays(k, k4) {
     let j = 0; t4 = k.t.map(tt => { while (j + 1 < k4.t.length && k4.t[j + 1] + 4 * 36e5 <= tt + 36e5) j++; return j >= 3 && k4.t[j] + 4 * 36e5 <= tt + 36e5 ? e4[j] - e4[j - 3] : null; }); }
   return { ema, rsi, vav, t4 };
 }
-function traderSim(k, i, atr, lev, long, H, A, minScore, entryMode = 'now', waitBars = 6) {
+function traderSim(k, i, atr, lev, long, H, A, minScore, entryMode = 'now', waitBars = 6, trail = null) {
   const n = k.c.length, e0 = k.c[i], st = lev[1] * atr, tg = lev[0] * atr;
   const stop = long ? e0 - st : e0 + st, target = long ? e0 + tg : e0 - tg;
   if (i < 30) return null;
@@ -305,10 +305,18 @@ function traderSim(k, i, atr, lev, long, H, A, minScore, entryMode = 'now', wait
       e = long ? Math.min(lim, k.o[f]) : Math.max(lim, k.o[f]); jStart = f;
     }
     if (long ? (e >= target || e <= stop) : (e <= target || e >= stop)) return null;
-    const risk = Math.abs(e - stop); let R = null, jj; const maxJ = Math.min(n - 1, i + H);
+    const risk = Math.abs(e - stop); let R = null, jj; const maxJ = Math.min(n - 1, i + (trail ? 2 * H : H));
+    let st2 = stop, best = e, on = false;
     for (jj = jStart; jj <= maxJ; jj++) {
-      if (long ? k.l[jj] <= stop : k.h[jj] >= stop) { R = -1; break; }
-      if (jj > jStart && (long ? k.h[jj] >= target : k.l[jj] <= target)) { R = Math.abs(target - e) / risk; break; }
+      if (long ? k.l[jj] <= st2 : k.h[jj] >= st2) { R = on ? ((long ? Math.min(st2, k.o[jj]) - e : e - Math.max(st2, k.o[jj])) / risk) : -1; break; }
+      if (jj > jStart && (long ? k.h[jj] >= target : k.l[jj] <= target)) {
+        if (!trail) { R = Math.abs(target - e) / risk; break; }
+        on = true;
+      }
+      if (on) { best = long ? Math.max(best, k.h[jj]) : Math.min(best, k.l[jj]); const tgD = Math.abs(target - e);
+        // 'r1': stop 1R za najlepszą ceną; 'half': co najmniej połowa drogi do celu zabezpieczona, potem 1R za najlepszą
+        const ns = trail === 'r1' ? (long ? best - risk : best + risk) : (long ? Math.max(e + tgD * 0.5, best - risk) : Math.min(e - tgD * 0.5, best + risk));
+        if (long ? ns > st2 : ns < st2) st2 = ns; }
     }
     if (R === null) { jj = maxJ; R = (long ? k.c[jj] - e : e - k.c[jj]) / risk; }
     return { R: R - 0.002 * e / risk, bars: jj - i, sc };
@@ -343,7 +351,7 @@ async function worker() {
           const rw = raw[r.i]; if (!rw || !(rw.atr > 0)) continue;
           const a = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, false), b = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, true);
           const cf = {}; for (const rule of ['break']) { const c = confirmSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, rule); cf[rule] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
-          for (const [nm, em] of [['tr2', 'now'], ['rLvl', 'lvl'], ['rMid', 'mid'], ['rSig', 'sig']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
+          for (const [nm, em, tr] of [['tr2', 'now', null], ['tTr1', 'now', 'r1'], ['tHalf', 'now', 'half']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em, 6, tr); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           cand.push({ side, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
         }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { fh: cand }, pool: null }); continue;
@@ -620,8 +628,8 @@ async function main() {
     console.log(`\n=== pula: przewaga ≥ ${liftMin}, TOP ${TOPN} · F (kopia aplikacji 2:1) vs H (kopia + ciągnięcie zysku) · horyzont ${IV} · ${coins.length} coinów · ${picks.length} zielonych scenariuszy ===`);
     console.log(`Okres: ${new Date(from).toISOString().slice(0, 10)} – ${new Date(to).toISOString().slice(0, 10)} · start 1000 $, ryzyko 1% na pozycję (procent składany), maks. 10 pozycji, 1 na coin, łączne ryzyko ≤10%, dzienny limit straty 6%, koszty 0,1%/stronę`);
     for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) {
-      for (const w of ['F', 'tr2', 'rLvl', 'rMid', 'rSig']) { const r = fhSim(picks, w, a, b);
-        console.log(`${lbl.padEnd(16)} ${({ F: 'F bez potw.', H: 'H ciągnięcie', break: 'samo wybicie', tr2: 'I: wejście przy wybiciu', rLvl: 'I: czeka na powrót do wybicia', rMid: 'I: czeka na połowę korekty', rSig: 'I: czeka na cenę sygnału' })[w].padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
+      for (const w of ['F', 'H', 'tr2', 'tTr1', 'tHalf']) { const r = fhSim(picks, w, a, b);
+        console.log(`${lbl.padEnd(16)} ${({ F: 'F bez potw.', H: 'H ciągnięcie', break: 'samo wybicie', tr2: 'I: wejście przy wybiciu', tTr1: 'I + ciągnięcie (1R za ceną)', tHalf: 'I + ciągnięcie (½ celu pewne)' })[w].padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
     }
     const zlib = require('zlib');
     console.log('FHDATA:' + zlib.gzipSync(JSON.stringify(picks.map(x => [x.coin, x.side, x.t, +x.RF.toFixed(3), +x.RH.toFixed(3), x.eF, x.eH, +x.lift.toFixed(3)]))).toString('base64'));
