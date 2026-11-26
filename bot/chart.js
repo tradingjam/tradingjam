@@ -13,7 +13,7 @@ function chartSVG(k, o) {
   const E = ema.slice(s);
   const levels = [o.lvl, o.stop, o.target, o.entry].filter(x => x > 0);
   let lo = Math.min(...Lw, ...levels), hi = Math.max(...Hh, ...levels); const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
-  const cw = (W - PL - PR) / n, X = i => PL + cw * (i + 0.5), Y = v => PT + (hi - v) / (hi - lo) * PH;
+  const FUT = 12, cw = (W - PL - PR) / (n + FUT), X = i => PL + cw * (i + 0.5), Y = v => PT + (hi - v) / (hi - lo) * PH;
   const vmax = Math.max(...V, 1e-12);
   let g = '';
   for (let q = 0; q <= 4; q++) { const y = PT + PH * q / 4; g += `<line x1="${PL}" x2="${W - PR}" y1="${y}" y2="${y}" stroke="${C.grid}" stroke-width="1"/>`; }
@@ -23,6 +23,32 @@ function chartSVG(k, o) {
     const y1 = Y(Math.max(O[i], Cc[i])), y2 = Y(Math.min(O[i], Cc[i]));
     g += `<rect x="${x - bw / 2}" y="${y1}" width="${bw}" height="${Math.max(1.5, y2 - y1)}" fill="${col}"/>`;
     if (V.length) { const vh = (V[i] || 0) / vmax * VH; g += `<rect x="${x - bw / 2}" y="${VT + VH - vh}" width="${bw}" height="${vh}" fill="${col}" opacity="0.45"/>`; }
+  }
+  // linie trendu: dwa ostatnie lokalne szczyty (opór) i dwa ostatnie lokalne dołki (wsparcie), przedłużone w prawo
+  const piv = (arr, isHi) => { const out = []; for (let i = 3; i < n - 2; i++) { let ok = true; for (let j = i - 3; j <= Math.min(n - 1, i + 3); j++) if (j !== i && (isHi ? arr[j] > arr[i] : arr[j] < arr[i])) { ok = false; break; } if (ok && (!out.length || i - out[out.length - 1] >= 5)) out.push(i); } return out; };
+  const tline = (pts, arr, col, label) => {
+    if (pts.length < 2) return '';
+    const [i1, i2] = pts.slice(-2), v1 = arr[i1], v2 = arr[i2], slope = (v2 - v1) / (i2 - i1), xe = n - 1 + FUT, ve = v2 + slope * (xe - i2);
+    if (!(ve > lo && ve < hi)) return '';
+    return `<line x1="${X(i1)}" y1="${Y(v1)}" x2="${X(xe)}" y2="${Y(ve)}" stroke="${col}" stroke-width="1.8" opacity="0.75"/><circle cx="${X(i1)}" cy="${Y(v1)}" r="4" fill="${col}"/><circle cx="${X(i2)}" cy="${Y(v2)}" r="4" fill="${col}"/>
+      <text x="${X(i2) + 6}" y="${Y(v2) + (label === 'opór' ? -8 : 18)}" font-size="13" font-family="DejaVu Sans, Arial" fill="${col}">${label}</text>`;
+  };
+  g += tline(piv(Hh, true), Hh, '#8fa3c7', 'opór') + tline(piv(Lw, false), Lw, '#8fa3c7', 'wsparcie');
+  // scenariusz: pola zysku i ryzyka od wejścia (albo poziomu wybicia) w przyszłość + planowany przebieg
+  const e0 = o.entry || o.lvl, xa = X(n - 1) + cw * 0.6, xb = X(n - 1 + FUT);
+  if (e0 > 0 && o.target > 0 && o.stop > 0) {
+    const yE = Y(e0), yT = Y(o.target), yS = Y(o.stop);
+    g += `<rect x="${xa}" y="${Math.min(yE, yT)}" width="${xb - xa}" height="${Math.abs(yT - yE)}" fill="${C.target}" opacity="0.16"/>`;
+    g += `<rect x="${xa}" y="${Math.min(yE, yS)}" width="${xb - xa}" height="${Math.abs(yS - yE)}" fill="${C.stop}" opacity="0.16"/>`;
+    const last = Cc[n - 1], xm = xa + (xb - xa) * 0.28, xt = xb - 10;
+    const path = o.entry ? [[X(n - 1), Y(last)], [xm, Y(e0 + (o.target - e0) * 0.35)], [xt, yT]] : [[X(n - 1), Y(last)], [xa + (xb - xa) * 0.15, yE], [xm, Y(e0 + (o.target - e0) * 0.3)], [xt, yT]];
+    g += `<polyline fill="none" stroke="${C.text}" stroke-width="2.4" stroke-dasharray="7 6" points="${path.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}"/>`;
+    const [px, py] = path[path.length - 2], ang = Math.atan2(yT - py, xt - px), ah = 12;
+    g += `<polygon fill="${C.text}" points="${xt},${yT} ${xt - ah * Math.cos(ang - 0.45)},${yT - ah * Math.sin(ang - 0.45)} ${xt - ah * Math.cos(ang + 0.45)},${yT - ah * Math.sin(ang + 0.45)}"/>`;
+    const rr = Math.abs(o.target - e0) / Math.abs(e0 - o.stop), tp = (o.target / e0 - 1) * 100, sl = (o.stop / e0 - 1) * 100;
+    g += `<text x="${(xa + xb) / 2}" y="${(yE + yT) / 2 + 5}" text-anchor="middle" font-size="14" font-family="DejaVu Sans, Arial" font-weight="bold" fill="${C.target}">zysk ${Math.abs(tp).toFixed(1)}%</text>`;
+    g += `<text x="${(xa + xb) / 2}" y="${(yE + yS) / 2 + 5}" text-anchor="middle" font-size="14" font-family="DejaVu Sans, Arial" font-weight="bold" fill="${C.stop}">ryzyko ${Math.abs(sl).toFixed(1)}%</text>`;
+    g += `<text x="${(xa + xb) / 2}" y="${PT + PH + 22}" text-anchor="middle" font-size="13" font-family="DejaVu Sans, Arial" fill="${C.dim}">zysk : ryzyko = ${rr.toFixed(1)} : 1</text>`;
   }
   g += `<polyline fill="none" stroke="${C.ema}" stroke-width="2" opacity="0.8" points="${E.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')}"/>`;
   const hline = (v, col, label, dash) => v > 0 ? `<line x1="${PL}" x2="${W - PR + 6}" y1="${Y(v)}" y2="${Y(v)}" stroke="${col}" stroke-width="2" ${dash ? 'stroke-dasharray="8 6"' : ''}/>
