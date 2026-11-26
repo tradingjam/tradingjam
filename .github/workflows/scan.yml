@@ -36,6 +36,10 @@ jobs:
             else rm -f out/bot_prev.json; echo "BOT_PREV_STATUS=missing" >> $GITHUB_ENV; fi
           else echo "BOT_PREV_STATUS=error" >> $GITHUB_ENV; fi
 
+      - name: Moduł wykresów dla powiadomień (PNG)
+        continue-on-error: true
+        run: npm install --no-save --no-audit --no-fund --prefix bot @resvg/resvg-js@2.6.2
+
       - name: Bot na sucho (wirtualne konta)
         continue-on-error: true
         env:

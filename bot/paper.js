@@ -450,6 +450,12 @@ function traderScore(k, k4, q, long) {
   const sc = Object.values(ch).filter(Boolean).length;
   return { sc, txt: Object.entries(ch).map(([n, v]) => `${n} ${v ? '✓' : '✗'}`).join(', ') };
 }
+// wykresy na Telegram (konto I): zbierane w trakcie przebiegu, wysyłane po zapisie stanu
+const PHOTOS = [];
+async function queueChart(res, w, status, extra = {}) {
+  if (!process.env.TELEGRAM_TOKEN || PHOTOS.length >= 6) return;
+  try { const k = await res.klines1h(w.sym); if (k) PHOTOS.push({ k, o: { base: w.base, side: w.side, status, lvl: w.lvl, stop: w.stop, target: w.target, sub: `model ${(w.p * 100).toFixed(0)}% · przewaga +${(w.lift * 100).toFixed(0)} pkt · konto I (trader)`, checks: (w.scoreTxt || w.lastTxt || '').replace(/, /g, '  '), ...extra } }); } catch (e) { }
+}
 const closedIdx = (k, now) => { let q = k.t.length - 1; while (q >= 0 && k.t[q] + 36e5 > now) q--; return q; };
 // 0. obserwowane scenariusze: wybicie (zlecenie stop wykonane na 5m), stop przed wybiciem, uzbrajanie na kolejną godzinę
 async function traderWatch(key, st, res, barsFor, byBase, now) {
@@ -469,6 +475,7 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
     }
     if (done && done.fill) {
       const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader + ciągnięcie zysku', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓, ${w.scoreTxt}`, limit: w.lvl }, done.fill, done.t, byBase, key);
+      if (typeof r !== 'string') await queueChart(res, w, 'WEJŚCIE – wybicie potwierdzone', { entry: done.fill });
       if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`);
       st.watch = st.watch.filter(x => x !== w); continue;
     }
@@ -485,12 +492,13 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
       if (live && live.price > 0 && (L ? live.price >= w.lvl : live.price <= w.lvl)) {
         const fp = fill(live.price, w.side, true); w.scoreTxt = `${s.sc}/5: ${s.txt}`;
         if (rrAt(w, fp) >= TR.minRR) { const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader + ciągnięcie zysku', fillType: 'wybicie', why: `wybicie ${w.lvl.toPrecision(5)} ✓ (już nastąpiło), ${w.scoreTxt}`, limit: w.lvl }, fp, now, byBase, key);
-          if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`); }
+          if (typeof r === 'string') st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`);
+          else await queueChart(res, w, 'WEJŚCIE – wybicie już nastąpiło', { entry: fp }); }
         else st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): cena już za daleko za poziomem wybicia (zostało tylko ${rrAt(w, fp).toFixed(1)}R do celu)`);
         st.watch = st.watch.filter(x => x !== w); continue;
       }
       const was = !!(w.armedUntil && w.armedUntil > now - 6e4); w.armedAt = now; w.armedUntil = Math.min(w.expires, now + 36e5); w.scoreTxt = `${s.sc}/5: ${s.txt}`; w.armPrice = live ? live.price : null;
-      if (!was) st.log.unshift(`${stamp(now)} czeka na wybicie ${w.base} ${w.side} ${L ? 'powyżej' : 'poniżej'} ${w.lvl.toPrecision(5)} (${w.scoreTxt})`); }
+      if (!was) { st.log.unshift(`${stamp(now)} czeka na wybicie ${w.base} ${w.side} ${L ? 'powyżej' : 'poniżej'} ${w.lvl.toPrecision(5)} (${w.scoreTxt})`); await queueChart(res, w, 'czeka na wybicie'); } }
     else { w.armedAt = null; w.armedUntil = null; }
   }
 }
@@ -661,6 +669,22 @@ async function main() {
   state.updatedAt = now;
   saveState(path.join(OUT_DIR, 'bot.json'), state);
   await sendTelegram(buildNotice(state, logLen, now));
+  await sendCharts();
+}
+async function sendCharts() {
+  const token = process.env.TELEGRAM_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chat || !PHOTOS.length) return;
+  const { chartSVG, renderPng } = require('./chart.js');
+  for (const ph of PHOTOS) {
+    try {
+      const png = renderPng(chartSVG(ph.k, ph.o)); if (!png) { console.log('Telegram: brak modułu do wykresów – pomijam zdjęcia'); return; }
+      const fd = new FormData(); fd.append('chat_id', chat);
+      fd.append('caption', `📊 ${ph.o.base} ${ph.o.side} · ${ph.o.status}\nwybicie ${ph.o.lvl.toPrecision(5)} · stop ${ph.o.stop.toPrecision(5)} · cel ${ph.o.target.toPrecision(5)}${ph.o.entry ? ' · wejście ' + ph.o.entry.toPrecision(5) : ''}\n${ph.o.checks}`);
+      fd.append('photo', new Blob([png], { type: 'image/png' }), 'wykres.png');
+      const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: 'POST', body: fd });
+      console.log('Telegram wykres:', r.ok ? 'wysłano' : 'błąd ' + r.status);
+    } catch (e) { console.log('Telegram wykres: nie udało się'); }
+  }
 }
 
 // ---------- powiadomienia na Telegram (tylko gdy coś się wydarzyło) ----------
