@@ -352,7 +352,9 @@ async function worker() {
           const a = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, false), b = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, true);
           const cf = {}; for (const rule of ['break']) { const c = confirmSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, rule); cf[rule] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           for (const [nm, em, tr] of [['tr2', 'now', null], ['tTr1', 'now', 'r1'], ['tHalf', 'now', 'half']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em, 6, tr); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
-          cand.push({ side, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
+          if (!k._rsi) { const c = k.c, m = c.length, rs = new Array(m).fill(50); let g = 0, l = 0; for (let x = 1; x < m; x++) { const d = c[x] - c[x - 1], u = Math.max(d, 0), dn = Math.max(-d, 0); if (x <= 14) { g += u / 14; l += dn / 14; } else { g = (g * 13 + u) / 14; l = (l * 13 + dn) / 14; } if (x >= 14) rs[x] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } k._rsi = rs; }
+          const fl = tradeSim(k, r.i, rw.atr * SCALE, LEV, side !== 'L', H, false);
+          cand.push({ side, rsi: k._rsi[r.i], RFf: fl.R, eFf: k.t[Math.min(r.i + fl.bars, n - 1)] + STEP, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
         }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { fh: cand }, pool: null }); continue;
       }
@@ -612,10 +614,16 @@ async function main() {
         if (perHour && open.filter(o => o.side === x.side && x.t - o.t < 36e5).length + trades.filter(o => o.side === x.side && x.t - o.t < 36e5).length >= perHour) continue;
         if (maxDir && open.filter(o => o.side === x.side).length >= maxDir) continue;
         if (open.reduce((a, o) => a + o.risk, 0) + bal * 0.01 > bal * 0.10) continue;
-        let R, end;
-        if (which === 'F') { R = x.RF; end = x.eF; } else if (which === 'H') { R = x.RH; end = x.eH; }
+        let R, end; let side = x.side;
+        const [wb, wm] = which.split('|'); const thr = wm ? +wm.slice(1) : 0;
+        const extreme = wm && ((x.side === 'S' && x.rsi < thr) || (x.side === 'L' && x.rsi > 100 - thr));
+        if (extreme && wm[0] === 's') continue;
+        if (extreme && wm[0] === 'f') { R = x.RFf; end = x.eFf; side = x.side === 'L' ? 'S' : 'L'; }
+        else if (wb === 'F') { R = x.RF; end = x.eF; } else if (wb === 'H') { R = x.RH; end = x.eH; }
+        else { const c = x.cf && x.cf[wb]; if (!c) continue; R = c[0]; end = c[1]; }
+        if (false) { R = x.RF; end = x.eF; } else if (which === 'H') { R = x.RH; end = x.eH; }
         else { const c = x.cf && x.cf[which]; if (!c) continue; R = c[0]; end = c[1]; }
-        open.push({ coin: x.coin, side: x.side, R, end, risk: bal * 0.01, t: x.t });
+        open.push({ coin: x.coin, side, R, end, risk: bal * 0.01, t: x.t });
       }
       closeUntil(Infinity);
       const months = (to - from) / (30 * 864e5), mret = [];
@@ -634,6 +642,13 @@ async function main() {
       for (const w of ['F', 'H', 'tr2', 'tTr1', 'tHalf']) { const r = fhSim(picks, w, a, b);
         console.log(`${lbl.padEnd(16)} ${({ F: 'F bez potw.', H: 'H ciągnięcie', break: 'samo wybicie', tr2: 'I: wejście przy wybiciu', tTr1: 'I + ciągnięcie (1R za ceną)', tHalf: 'I + ciągnięcie (½ celu pewne)' })[w].padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
     }
+    console.log('\n--- RSI w chwili sygnału: odpuszczanie (s) i odwracanie (f) przy wyprzedaniu/wykupieniu ---');
+    for (const [lbl, a, b] of [['cały test', from, to], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of [['F', 'F bez zmian'], ['F|s35', 'F odpuszcza: short RSI<35 / long RSI>65'], ['F|s30', 'F odpuszcza: short RSI<30 / long RSI>70'], ['F|f35', 'F odwraca: long zamiast shorta przy RSI<35 (i odwrotnie)'], ['F|f30', 'F odwraca przy RSI<30 / >70'], ['tHalf', 'I bez zmian'], ['tHalf|s35', 'I odpuszcza przy RSI<35 / >65'], ['tHalf|s30', 'I odpuszcza przy RSI<30 / >70']]) {
+      const r = fhSim(picks, w, a, b);
+      console.log(`RSI ${lbl.padEnd(16)} ${nm.padEnd(56)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
+    }
+    const ext = picks.filter(x => (x.side === 'S' && x.rsi < 35) || (x.side === 'L' && x.rsi > 65));
+    console.log(`RSI scenariusze „spóźnione” (short RSI<35 / long RSI>65): ${ext.length} z ${picks.length} · F śr. ${(ext.reduce((q, x) => q + x.RF, 0) / (ext.length || 1)).toFixed(2)}R · po odwróceniu śr. ${(ext.reduce((q, x) => q + x.RFf, 0) / (ext.length || 1)).toFixed(2)}R · pozostałe F śr. ${(picks.filter(x => !ext.includes(x)).reduce((q, x) => q + x.RF, 0) / Math.max(1, picks.length - ext.length)).toFixed(2)}R`);
     console.log('\n--- Ograniczenie korelacji (te same scenariusze, różne limity) ---');
     for (const [lbl, a, b] of [['cały test', from, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const w of ['F', 'H', 'tHalf']) for (const [ph, md, nm] of [[0, 0, 'bez limitu'], [2, 0, 'maks. 2/godz. w 1 kier.'], [1, 0, 'maks. 1/godz. w 1 kier.'], [2, 5, '2/godz. + maks. 5 otwartych w 1 kier.']]) {
       const r = fhSim(picks, w, a, b, ph, md);
