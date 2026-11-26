@@ -41,7 +41,7 @@ function chartSVG(k, o) {
     g += `<rect x="${xa}" y="${Math.min(yE, yT)}" width="${xb - xa}" height="${Math.abs(yT - yE)}" fill="${C.target}" opacity="0.16"/>`;
     g += `<rect x="${xa}" y="${Math.min(yE, yS)}" width="${xb - xa}" height="${Math.abs(yS - yE)}" fill="${C.stop}" opacity="0.16"/>`;
     const last = Cc[n - 1], xm = xa + (xb - xa) * 0.28, xt = xb - 10;
-    const path = o.entry ? [[X(n - 1), Y(last)], [xm, Y(e0 + (o.target - e0) * 0.35)], [xt, yT]] : [[X(n - 1), Y(last)], [xa + (xb - xa) * 0.15, yE], [xm, Y(e0 + (o.target - e0) * 0.3)], [xt, yT]];
+    const path = o.entry && o.entryLabel !== 'limit' ? [[X(n - 1), Y(last)], [xm, Y(e0 + (o.target - e0) * 0.35)], [xt, yT]] : [[X(n - 1), Y(last)], [xa + (xb - xa) * 0.15, yE], [xm, Y(e0 + (o.target - e0) * 0.3)], [xt, yT]];
     g += `<polyline fill="none" stroke="${C.text}" stroke-width="2.4" stroke-dasharray="7 6" points="${path.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}"/>`;
     const [px, py] = path[path.length - 2], ang = Math.atan2(yT - py, xt - px), ah = 12;
     g += `<polygon fill="${C.text}" points="${xt},${yT} ${xt - ah * Math.cos(ang - 0.45)},${yT - ah * Math.sin(ang - 0.45)} ${xt - ah * Math.cos(ang + 0.45)},${yT - ah * Math.sin(ang + 0.45)}"/>`;
@@ -54,7 +54,7 @@ function chartSVG(k, o) {
   const hline = (v, col, label, dash) => v > 0 ? `<line x1="${PL}" x2="${W - PR + 6}" y1="${Y(v)}" y2="${Y(v)}" stroke="${col}" stroke-width="2" ${dash ? 'stroke-dasharray="8 6"' : ''}/>
     <rect x="${W - PR + 8}" y="${Y(v) - 13}" width="${PR - 12}" height="26" rx="5" fill="${col}"/>
     <text x="${W - PR + 14}" y="${Y(v) + 5}" font-size="14" font-family="DejaVu Sans, Arial" font-weight="bold" fill="${C.bg}">${esc(label)} ${fmt(v)}</text>` : '';
-  g += hline(o.target, C.target, 'cel', true) + hline(o.stop, C.stop, 'stop', true) + hline(o.lvl, C.lvl, 'wybicie', true) + (o.entry ? hline(o.entry, C.entry, 'wejście', false) : '');
+  g += hline(o.target, C.target, 'cel', true) + hline(o.stop, C.stop, 'stop', true) + hline(o.lvl, C.lvl, 'wybicie', true) + (o.entry ? hline(o.entry, C.entry, o.entryLabel || 'wejście', !!o.entryLabel && o.entryLabel !== 'wejście') : '');
   const sideCol = o.side === 'LONG' ? C.up : C.down;
   const head = `<text x="${PL}" y="40" font-size="30" font-family="DejaVu Sans, Arial" font-weight="bold" fill="${C.text}">${esc(o.base)} <tspan fill="${sideCol}">${esc(o.side)}</tspan> <tspan font-size="20" fill="${C.dim}" font-weight="normal">· ${esc(o.status)}</tspan></text>
     <text x="${PL}" y="70" font-size="16" font-family="DejaVu Sans, Arial" fill="${C.dim}">${esc(o.sub || '')}</text>
