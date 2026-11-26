@@ -524,6 +524,8 @@ async function traderEntries(key, st, res, byBase, now, skip) {
     const w = { base: x.co.base, sym: live.sym, side: x.d.dir, iv: '1h', sigT: now, expires: now + TR.watchMs, end: now + TR.H,
       lvl: L ? Math.max(k.h[q], k.h[q - 1]) : Math.min(k.l[q], k.l[q - 1]), stop: x.d.stop * kx, target: x.d.target * kx, p: x.d.p, lift: x.lift, src: x.co.ex };
     if (L ? !(w.stop < live.price && w.lvl < w.target) : !(w.stop > live.price && w.lvl > w.target)) { skip('poziomy poza zakresem'); continue; }
+    // wejście na poziomie wybicia musi dawać sensowny układ (≥ 1,2 : 1), inaczej szkoda obserwować
+    if (rrAt(w, w.lvl) < TR.minRR) { skip('poziom wybicia za blisko celu'); st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): poziom wybicia ${w.lvl.toPrecision(5)} za blisko celu – zysk : ryzyko tylko ${rrAt(w, w.lvl).toFixed(1)} : 1`); continue; }
     st.watch.push(w); added++;
     st.log.unshift(`${stamp(now)} obserwuje ${w.base} ${w.side} (model ${(x.d.p * 100).toFixed(0)}%, przewaga +${(x.lift * 100).toFixed(0)} pkt) – czeka na potwierdzenie do 3 godz.`);
   }

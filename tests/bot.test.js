@@ -374,3 +374,14 @@ test('limit korelacji: maks. 2 nowe pozycje w tym samym kierunku na godzinę (ko
   assert.strictEqual(st.positions.length, 2);
   assert.ok(st.log.some(l => l.includes('limit korelacji')));
 });
+test('konto I: nie obserwuje scenariusza, gdy poziom wybicia jest za blisko celu (< 1,2 : 1)', async () => {
+  const now = Date.UTC(2026, 10, 26, 10, 20);
+  const k = upK(now); const last = k.c[k.c.length - 1];
+  // cel tylko 0,5% nad ceną, a wybicie ~0,2% wyżej → zysk : ryzyko przy wybiciu < 1,2
+  const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.015, longS: last * 0.985, shortT: last * 0.96, shortS: last * 1.02 } } } } };
+  const r = { generatedAt: new Date(now).toISOString(), coins: [coin], klines1h: async () => k, klines4h: async () => null };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  await B.runAccount('I', st, r, new Map([['TTT', { price: last, qv: 1e7, sym: 'TTT-USDT' }]]), async () => [], now);
+  assert.strictEqual((st.watch || []).length, 0);
+  assert.ok(st.log.some(l => l.includes('za blisko celu')));
+});
