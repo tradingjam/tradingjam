@@ -3,7 +3,7 @@ name: Budowanie aplikacji
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'scripts/**', '.github/workflows/build-app.yml']
+    paths: ['app/**', 'scripts/**', 'web/**', '.github/workflows/build-app.yml']
   workflow_dispatch:
 
 permissions:
@@ -47,6 +47,8 @@ jobs:
           cp assets/apple-touch-icon.png dist-web/
           node ../scripts/web-meta.js dist-web/index.html "/${GITHUB_REPOSITORY#*/}"
           touch dist-web/.nojekyll
+          # wizytówka z linkami: /links
+          mkdir -p dist-web/links && cp -r ../web/links/. dist-web/links/ && cp assets/icon.png dist-web/links/logo.png
 
       - name: Publikacja web (gałąź gh-pages)
         run: |
