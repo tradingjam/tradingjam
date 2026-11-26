@@ -359,7 +359,7 @@ async function copyFills(key, st, barsFor, byBase, now) {
     if (f) {
       const r = copyOpen(st, o, f.px, f.t, byBase, key);
       if (typeof r === 'string') st.log.unshift(`${stamp(now)} zlecenie ${o.base} ${o.side} wykonane, ale pominięte: ${r}`);
-      else if (key === 'F' && CHART_RES) await queueChart(CHART_RES, { ...o, acct: 'F (kopia aplikacji)' }, 'WEJŚCIE – zlecenie z limitem wykonane', { entry: f.px, entryLabel: 'wejście', checks: `scenariusz z aplikacji · ${IV_LABEL[o.iv] || o.iv} · układ 2:1` });
+      else if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – zlecenie z limitem wykonane', { entry: f.px, entryLabel: 'wejście', checks: `scenariusz z aplikacji · ${IV_LABEL[o.iv] || o.iv} · układ 2:1` });
       st.pending = st.pending.filter(x => x !== o);
     } else if (now >= o.expires) {
       st.log.unshift(`${stamp(now)} zlecenie z limitem ${o.base} ${o.side} po ${o.limit.toPrecision(5)} wygasło – cena nie wróciła`);
@@ -389,7 +389,7 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
       const k = live.price / p.price, px = fill(live.price, p.dir, true);
       const o = { ...base, limit: live.price, target: p.target * k, stop: p.stop * k, fillType: 'od razu (scenariusz z ' + (p.ex === 'okx' ? 'OKX' : 'Binance') + ', ceny z BingX)' };
       const r = copyOpen(st, o, px, now, byBase, key);
-      if (typeof r === 'string') pass(p, r); else { opened++; if (key === 'F' && CHART_RES) await queueChart(CHART_RES, { ...o, acct: 'F (kopia aplikacji)' }, 'WEJŚCIE – po cenie BingX', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji (${p.ex === 'okx' ? 'OKX' : 'Binance'}) · ${IV_LABEL[o.iv] || o.iv} · cel i stop w tych samych %` }); }
+      if (typeof r === 'string') pass(p, r); else { opened++; if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – po cenie BingX', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji (${p.ex === 'okx' ? 'OKX' : 'Binance'}) · ${IV_LABEL[o.iv] || o.iv} · cel i stop w tych samych %` }); }
       continue;
     }
     // scenariusz z BingX: zlecenie z limitem dokładnie po cenie z aplikacji
@@ -400,11 +400,11 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
     if (worse <= 0) {
       const px = L ? Math.min(fill(live.price, 'LONG', true), p.price) : Math.max(fill(live.price, 'SHORT', true), p.price);
       const r = copyOpen(st, { ...o, fillType: 'od razu' }, px, now, byBase, key);
-      if (typeof r === 'string') pass(p, r); else { opened++; if (key === 'F' && CHART_RES) await queueChart(CHART_RES, { ...o, acct: 'F (kopia aplikacji)', checks: '' }, 'WEJŚCIE – po cenie z aplikacji', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji · ${IV_LABEL[o.iv] || o.iv} · układ 2:1` }); }
+      if (typeof r === 'string') pass(p, r); else { opened++; if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – po cenie z aplikacji', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji · ${IV_LABEL[o.iv] || o.iv} · układ 2:1` }); }
     } else {
       // cena uciekła: zlecenie czeka godzinę na powrót do ceny z aplikacji (nie wchodzi drożej)
       st.pending.push(o);
-      if (key === 'F' && CHART_RES) await queueChart(CHART_RES, { ...o, acct: 'F (kopia aplikacji)' }, 'zlecenie z limitem – czeka na cenę z aplikacji', { entry: o.limit, entryLabel: 'limit', checks: `cena teraz ${live.price.toPrecision(5)} · zlecenie ważne 1 godz. · ${IV_LABEL[o.iv] || o.iv}` });
+      if (COPY_CHART[key]) await copyChart(key, o, 'zlecenie z limitem – czeka na cenę z aplikacji', { entry: o.limit, entryLabel: 'limit', checks: `cena teraz ${live.price.toPrecision(5)} · zlecenie ważne 1 godz. · ${IV_LABEL[o.iv] || o.iv}` });
       st.log.unshift(`${stamp(now)} zlecenie z limitem ${p.base} ${p.dir} po ${p.price.toPrecision(5)} (cena teraz ${live.price.toPrecision(5)}, ${IV_LABEL[p.iv] || p.iv})`);
       skip('czeka zlecenie z limitem');
     }
@@ -457,7 +457,17 @@ const PHOTOS = [];
 let CHART_RES = null; // wyniki skanu (świece) dla wykresów konta F
 async function queueChart(res, w, status, extra = {}) {
   if (!process.env.TELEGRAM_TOKEN || PHOTOS.length >= 6) return;
-  try { const k = await res.klines1h(w.sym); if (k) PHOTOS.push({ k, o: { base: w.base, side: w.side, status, lvl: w.lvl, stop: w.stop, target: w.target, sub: `model ${((w.p || 0) * 100).toFixed(0)}% · przewaga +${((w.lift || 0) * 100).toFixed(0)} pkt · konto ${w.acct || 'I (trader)'}`, checks: (w.scoreTxt || w.lastTxt || '').replace(/, /g, '  '), ...extra } }); } catch (e) { }
+  // to samo wejście kilku kont (F i H z tego samego scenariusza) = jeden wykres z dopiskiem obu kont
+  if (w.pickId) {
+    const same = PHOTOS.find(ph => ph.pickId === w.pickId && ph.o.status === status);
+    if (same) { if (!same.accts.includes(w.acctKey)) { same.accts.push(w.acctKey); same.o.sub = same.o.sub.replace(/konto .*$/, `konto ${same.accts.join(' + ')} (to samo wejście)`); } return; }
+  }
+  try { const k = await res.klines1h(w.sym); if (k) PHOTOS.push({ k, pickId: w.pickId || null, accts: [w.acctKey || 'I'], o: { base: w.base, side: w.side, status, lvl: w.lvl, stop: w.stop, target: w.target, sub: `model ${((w.p || 0) * 100).toFixed(0)}% · przewaga +${((w.lift || 0) * 100).toFixed(0)} pkt · konto ${w.acct || 'I (trader)'}`, checks: (w.scoreTxt || w.lastTxt || '').replace(/, /g, '  '), ...extra } }); } catch (e) { }
+}
+const COPY_CHART = { F: 'F (kopia aplikacji)', H: 'H (kopia + ciągnięcie zysku)' };
+async function copyChart(key, o, status, extra) {
+  if (!COPY_CHART[key] || !CHART_RES) return;
+  await queueChart(CHART_RES, { ...o, acct: COPY_CHART[key], acctKey: key }, status, extra);
 }
 const closedIdx = (k, now) => { let q = k.t.length - 1; while (q >= 0 && k.t[q] + 36e5 > now) q--; return q; };
 // 0. obserwowane scenariusze: wybicie (zlecenie stop wykonane na 5m), stop przed wybiciem, uzbrajanie na kolejną godzinę
@@ -717,4 +727,4 @@ async function sendTelegram(text) {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };

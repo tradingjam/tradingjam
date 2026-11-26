@@ -385,3 +385,18 @@ test('konto I: nie obserwuje scenariusza, gdy poziom wybicia jest za blisko celu
   assert.strictEqual((st.watch || []).length, 0);
   assert.ok(st.log.some(l => l.includes('za blisko celu')));
 });
+
+test('wykres: to samo wejście F i H = jeden wykres z dopiskiem obu kont', async () => {
+  process.env.TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || 'test';
+  const P = require('../bot/paper.js');
+  P._PHOTOS.length = 0;
+  const res = { klines1h: async () => ({ t: [1], o: [1], h: [1], l: [1], c: [1], v: [1] }) };
+  const o = { pickId: 'x1', base: 'ABC', side: 'LONG', sym: 'ABC-USDT', stop: 1, target: 3, p: 0.5, lift: 0.1 };
+  await P._queueChart(res, { ...o, acct: 'F (kopia aplikacji)', acctKey: 'F' }, 'WEJŚCIE');
+  await P._queueChart(res, { ...o, acct: 'H (kopia + ciągnięcie zysku)', acctKey: 'H' }, 'WEJŚCIE');
+  await P._queueChart(res, { ...o, pickId: 'x2', acct: 'H (kopia + ciągnięcie zysku)', acctKey: 'H' }, 'WEJŚCIE');
+  assert.strictEqual(P._PHOTOS.length, 2);
+  assert.match(P._PHOTOS[0].o.sub, /konto F \+ H \(to samo wejście\)/);
+  assert.match(P._PHOTOS[1].o.sub, /konto H \(kopia/);
+  P._PHOTOS.length = 0;
+});
