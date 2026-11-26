@@ -325,8 +325,11 @@ function limitFill(o, bars, now) {
   return null;
 }
 // otwarcie pozycji F (cel i stop z aplikacji, wielkość wg ryzyka konta) – zwraca pozycję albo powód odrzucenia
+const DIR_PER_HOUR = 2; // ograniczenie korelacji: maks. 2 nowe pozycje w tym samym kierunku w ciągu godziny (konta F, H, I)
 function copyOpen(st, o, entry, t, byBase, key) {
   const A = ACCOUNTS[key], riskPct = A.riskPct || BASE.riskPct, L = o.side === 'LONG';
+  const sameDir = [...st.positions, ...st.closed.slice(-30)].filter(p => p.side === o.side && Math.abs(t - p.openedAt) < 36e5).length;
+  if (sameDir >= DIR_PER_HOUR) return `już ${sameDir} nowe pozycje ${L ? 'LONG' : 'SHORT'} w tej godzinie (limit korelacji)`;
   if (L ? !(o.stop < entry && entry < o.target) : !(o.target < entry && entry < o.stop)) return 'cena poza celem/stopem';
   const dist = Math.abs(entry - o.stop), eqNow = st.balance + unrealized(st, byBase);
   let qty = eqNow * riskPct / (dist + costPerUnit(entry));

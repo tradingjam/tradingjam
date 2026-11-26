@@ -363,3 +363,14 @@ test('konto I: nie wchodzi, gdy cena przeskoczy wybicie tak daleko, że do celu 
   assert.strictEqual(st.positions.length + st.closed.length, 0);
   assert.ok(st.log.some(l => l.includes('przeskoczyła za daleko')));
 });
+
+test('limit korelacji: maks. 2 nowe pozycje w tym samym kierunku na godzinę (konto F)', async () => {
+  const now = Date.UTC(2026, 10, 26, 10, 5);
+  const mk = (b, i) => ({ id: b, ex: 'bingx', method: 2, status: 'open', t: now - 6e4 + i, end: now + 24 * H, iv: '1h', base: b, dir: 'SHORT', price: 100, target: 96, stop: 102, p: 0.4, lift: 0.1 - i * 0.001 });
+  const hist = ['AAA', 'BBB', 'CCC', 'DDD'].map(mk);
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map(['AAA', 'BBB', 'CCC', 'DDD'].map(b => [b, { price: 100.1, qv: 1e7, sym: b + '-USDT' }]));
+  await B.runAccount('F', st, { ...res, generatedAt: new Date(now).toISOString(), history: hist }, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 2);
+  assert.ok(st.log.some(l => l.includes('limit korelacji')));
+});
