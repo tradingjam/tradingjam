@@ -621,8 +621,6 @@ async function main() {
         if (extreme && wm[0] === 'f') { R = x.RFf; end = x.eFf; side = x.side === 'L' ? 'S' : 'L'; }
         else if (wb === 'F') { R = x.RF; end = x.eF; } else if (wb === 'H') { R = x.RH; end = x.eH; }
         else { const c = x.cf && x.cf[wb]; if (!c) continue; R = c[0]; end = c[1]; }
-        if (false) { R = x.RF; end = x.eF; } else if (which === 'H') { R = x.RH; end = x.eH; }
-        else { const c = x.cf && x.cf[which]; if (!c) continue; R = c[0]; end = c[1]; }
         open.push({ coin: x.coin, side, R, end, risk: bal * 0.01, t: x.t });
       }
       closeUntil(Infinity);
