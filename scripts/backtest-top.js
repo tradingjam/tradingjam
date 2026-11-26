@@ -599,7 +599,7 @@ async function main() {
     const picks = []; const blocked = new Map();
     for (const t of [...byT.keys()].sort((a, b) => a - b)) { let n = 0;
       for (const x of [...byT.get(t).values()].sort((a, b) => b.lift - a.lift)) { if (n >= TOPN) break; const key = x.coin + x.side; if ((blocked.get(key) || 0) > t) continue; blocked.set(key, t + H * STEP); n++; picks.push(x); } }
-    const fhSim = (P, which, from, to) => {
+    const fhSim = (P, which, from, to, perHour = 0, maxDir = 0) => {
       const ev = P.filter(x => x.t >= from && x.t <= to).sort((a, b) => a.t - b.t);
       let bal = 1000, open = [], day = '', dayStart = bal, halted = false, peak = bal, dd = 0; const trades = [], curve = [[from, bal]];
       const closeUntil = t => { open.sort((a, b) => a.end - b.end); while (open.length && open[0].end <= t) { const o = open.shift(); bal += o.risk * o.R; trades.push(o); curve.push([o.end, bal]); peak = Math.max(peak, bal); dd = Math.max(dd, (peak - bal) / peak); } };
@@ -608,6 +608,9 @@ async function main() {
         const d = new Date(x.t + 36e5).toISOString().slice(0, 10); if (d !== day) { day = d; dayStart = bal; halted = false; }
         if (!halted && (dayStart - bal) / dayStart >= 0.06) halted = true;
         if (halted || open.length >= 10 || open.some(o => o.coin === x.coin)) continue;
+        // ograniczenie korelacji: maks. perHour nowych pozycji w tym samym kierunku w ciągu godziny, maks. maxDir otwartych w jednym kierunku
+        if (perHour && open.filter(o => o.side === x.side && x.t - o.t < 36e5).length + trades.filter(o => o.side === x.side && x.t - o.t < 36e5).length >= perHour) continue;
+        if (maxDir && open.filter(o => o.side === x.side).length >= maxDir) continue;
         if (open.reduce((a, o) => a + o.risk, 0) + bal * 0.01 > bal * 0.10) continue;
         let R, end;
         if (which === 'F') { R = x.RF; end = x.eF; } else if (which === 'H') { R = x.RH; end = x.eH; }
@@ -630,6 +633,11 @@ async function main() {
     for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) {
       for (const w of ['F', 'H', 'tr2', 'tTr1', 'tHalf']) { const r = fhSim(picks, w, a, b);
         console.log(`${lbl.padEnd(16)} ${({ F: 'F bez potw.', H: 'H ciągnięcie', break: 'samo wybicie', tr2: 'I: wejście przy wybiciu', tTr1: 'I + ciągnięcie (1R za ceną)', tHalf: 'I + ciągnięcie (½ celu pewne)' })[w].padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · saldo ${r.bal.toFixed(0)} $ · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%${r.mret.length > 1 ? ' · miesiące: ' + r.mret.map(v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%').join(' ') : ''}`); }
+    }
+    console.log('\n--- Ograniczenie korelacji (te same scenariusze, różne limity) ---');
+    for (const [lbl, a, b] of [['cały test', from, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const w of ['F', 'H', 'tHalf']) for (const [ph, md, nm] of [[0, 0, 'bez limitu'], [2, 0, 'maks. 2/godz. w 1 kier.'], [1, 0, 'maks. 1/godz. w 1 kier.'], [2, 5, '2/godz. + maks. 5 otwartych w 1 kier.']]) {
+      const r = fhSim(picks, w, a, b, ph, md);
+      console.log(`KOR ${lbl.padEnd(16)} ${w.padEnd(6)} ${nm.padEnd(38)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
     }
     const zlib = require('zlib');
     console.log('FHDATA:' + zlib.gzipSync(JSON.stringify(picks.map(x => [x.coin, x.side, x.t, +x.RF.toFixed(3), +x.RH.toFixed(3), x.eF, x.eH, +x.lift.toFixed(3)]))).toString('base64'));
