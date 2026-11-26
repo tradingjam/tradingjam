@@ -686,6 +686,14 @@ async function main() {
   await sendTelegram(buildNotice(state, logLen, now));
   await sendCharts();
 }
+// podpis pod wykresem: poziom wybicia tylko dla konta I (konta-kopie F/H go nie mają)
+function chartCaption(o) {
+  const n = v => (v > 0 ? v.toPrecision(5) : null);
+  const lv = [o.lvl > 0 ? `wybicie ${n(o.lvl)}` : null, o.entry > 0 ? `${o.entryLabel || 'wejście'} ${n(o.entry)}` : null,
+    o.stop > 0 ? `stop ${n(o.stop)}` : null, o.target > 0 ? `cel ${n(o.target)}` : null].filter(Boolean).join(' · ');
+  const acct = (o.sub || '').match(/konto (.*)$/);
+  return [`📊 ${o.base} ${o.side} · ${o.status}`, acct ? `konto ${acct[1]}` : null, lv, o.checks || null].filter(Boolean).join('\n');
+}
 async function sendCharts() {
   const token = process.env.TELEGRAM_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chat || !PHOTOS.length) return;
@@ -694,7 +702,7 @@ async function sendCharts() {
     try {
       const png = renderPng(chartSVG(ph.k, ph.o)); if (!png) { console.log('Telegram: brak modułu do wykresów – pomijam zdjęcia'); return; }
       const fd = new FormData(); fd.append('chat_id', chat);
-      fd.append('caption', `📊 ${ph.o.base} ${ph.o.side} · ${ph.o.status}\nwybicie ${ph.o.lvl.toPrecision(5)} · stop ${ph.o.stop.toPrecision(5)} · cel ${ph.o.target.toPrecision(5)}${ph.o.entry ? ' · wejście ' + ph.o.entry.toPrecision(5) : ''}\n${ph.o.checks}`);
+      fd.append('caption', chartCaption(ph.o));
       fd.append('photo', new Blob([png], { type: 'image/png' }), 'wykres.png');
       const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: 'POST', body: fd });
       console.log('Telegram wykres:', r.ok ? 'wysłano' : 'błąd ' + r.status);
@@ -727,4 +735,4 @@ async function sendTelegram(text) {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { chartCaption, _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };

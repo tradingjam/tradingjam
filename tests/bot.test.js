@@ -400,3 +400,11 @@ test('wykres: to samo wejście F i H = jeden wykres z dopiskiem obu kont', async
   assert.match(P._PHOTOS[1].o.sub, /konto H \(kopia/);
   P._PHOTOS.length = 0;
 });
+
+test('podpis wykresu: konto-kopia bez poziomu wybicia nie wywraca wysyłki', () => {
+  const { chartCaption } = require('../bot/paper.js');
+  const c = chartCaption({ base: 'MARSCOIN', side: 'SHORT', status: 'WEJŚCIE – po cenie BingX', entry: 0.0285, entryLabel: 'wejście', stop: 0.0291, target: 0.0274, sub: 'model 47% · konto F + H (to samo wejście)', checks: 'scenariusz z aplikacji' });
+  assert.match(c, /konto F \+ H/); assert.match(c, /wejście 0\.02850/); assert.doesNotMatch(c, /wybicie/);
+  const i = chartCaption({ base: 'HUMA', side: 'SHORT', status: 'czeka na wybicie', lvl: 0.006792, stop: 0.00697, target: 0.00652, sub: 'konto I (trader)' });
+  assert.match(i, /wybicie 0\.006792/);
+});
