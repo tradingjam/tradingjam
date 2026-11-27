@@ -291,6 +291,8 @@ function sweepAt(k, idx, atr, long, A, vol = false) {
 // Poziom przetestowany ≥ 2 razy na drodze do celu (np. podwójny dołek pod shortem): dołki (szczyty) lokalne z ±2 świec
 // w ostatnich 48 świecach; grupa ≥ 2 takich dołków w odległości ≤ 0,25 ATR = wsparcie. P = wsparcie między wejściem a celem,
 // T = wsparcie w pobliżu celu (±0,5 ATR). Dla longów analogicznie opór ze szczytów.
+const VEN_LISTS = (() => { try { const j = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'venue-lists.json'), 'utf8')); return { okx: new Set(j.okx), kraken: new Set(j.kraken) }; } catch (e) { return { okx: new Set(), kraken: new Set() }; } })();
+const VEN_OK = (coin, v) => VEN_LISTS[v].has(String(coin).split(':').pop().toUpperCase().replace(/^(1000000|1000|1M|100)/, ''));
 function levelAt(k, idx, atr, long, tgMult) {
   const e = k.c[idx], target = long ? e + tgMult * atr : e - tgMult * atr, pts = [];
   for (let m = Math.max(2, idx - 48); m <= idx - 2; m++) {
@@ -691,10 +693,13 @@ async function main() {
         if (open.reduce((a, o) => a + o.risk, 0) + bal * 0.01 > bal * 0.10) continue;
         let R, end; let side = x.side;
         const [wb, wm] = which.split('|'); const isRsi = wm && /^[sf]\d+$/.test(wm); const thr = isRsi ? +wm.slice(1) : 0;
-        if (wm === 'SW' && !x.swW) continue;
-        if (wm === 'SA' && x.swA) continue;
-        if (wm === 'LP' && x.lvP) continue;
-        if (wm === 'LT' && x.lvT) continue;
+        const fl = (wm || '').split('+');
+        if (fl.includes('SW') && !x.swW) continue;
+        if (fl.includes('SA') && x.swA) continue;
+        if (fl.includes('LP') && x.lvP) continue;
+        if (fl.includes('LT') && x.lvT) continue;
+        if (fl.includes('OK') && !VEN_OK(x.coin, 'okx')) continue;
+        if (fl.includes('KR') && !VEN_OK(x.coin, 'kraken')) continue;
         const extreme = isRsi && ((x.side === 'S' && x.rsi < thr) || (x.side === 'L' && x.rsi > 100 - thr));
         if (extreme && wm[0] === 's') continue;
         if (extreme && wm[0] === 'f') { R = x.RFf; end = x.eFf; side = x.side === 'L' ? 'S' : 'L'; }
@@ -750,6 +755,12 @@ async function main() {
     const avg = (A, f) => (A.reduce((q, x) => q + f(x), 0) / (A.length || 1)).toFixed(2);
     for (const [nm, key] of [['na drodze do celu', 'lvP'], ['przy celu', 'lvT']]) { const y = picks.filter(x => x[key]), no = picks.filter(x => !x[key]);
       console.log(`LVL scenariusze z poziomem ${nm}: ${y.length} z ${picks.length} · F śr. ${avg(y, x => x.RF)}R, H śr. ${avg(y, x => x.RH)}R, trafione ${(y.filter(x => x.RF > 0).length / (y.length || 1) * 100).toFixed(0)}% · bez poziomu: F śr. ${avg(no, x => x.RF)}R, H śr. ${avg(no, x => x.RH)}R, trafione ${(no.filter(x => x.RF > 0).length / (no.length || 1) * 100).toFixed(0)}%`); }
+    console.log('\n--- Giełdy z licencją UE: tylko coiny z OKX Europe (O) albo z Krakena (K) ---');
+    const VNN = { F: 'F kopia aplikacji (wszystkie coiny)', H: 'H ciągnięcie (wszystkie)', 'H|LT': 'H + filtr podwójnego dołka (obecne H)', 'F|OK': 'O = F tylko coiny OKX Europe', 'H|OK': 'O + ciągnięcie', 'H|LT+OK': 'O + ciągnięcie + filtr dołka', 'F|KR': 'K = F tylko coiny Kraken', 'H|KR': 'K + ciągnięcie', 'H|LT+KR': 'K + ciągnięcie + filtr dołka', 'F|LT+OK': 'O + filtr dołka (bez ciągnięcia)' };
+    for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of Object.entries(VNN)) {
+      const r = fhSim(picks, w, a, b, 2, 0);
+      console.log(`VEN ${lbl.padEnd(16)} ${nm.padEnd(40)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
+    }
     console.log('\n--- Ograniczenie korelacji (te same scenariusze, różne limity) ---');
     for (const [lbl, a, b] of [['cały test', from, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const w of ['F', 'H', 'tHalf']) for (const [ph, md, nm] of [[0, 0, 'bez limitu'], [2, 0, 'maks. 2/godz. w 1 kier.'], [1, 0, 'maks. 1/godz. w 1 kier.'], [2, 5, '2/godz. + maks. 5 otwartych w 1 kier.']]) {
       const r = fhSim(picks, w, a, b, ph, md);
