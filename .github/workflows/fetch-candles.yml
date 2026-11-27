@@ -20,5 +20,6 @@ jobs:
             done
             ls -la out; [ -s out/${{ inputs.sym }}-1h.json ] && break
           done
-      - uses: actions/upload-artifact@v4
-        with: { name: candles, path: out }
+      - name: print
+        run: |
+          for f in out/*.json; do echo "FILE $f"; python3 -c "import json,sys;k=json.load(open(sys.argv[1]));print('\n'.join('K '+','.join(str(x) for x in r[:6]+[r[9]]) for r in k))" $f; done
