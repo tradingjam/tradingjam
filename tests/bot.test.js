@@ -313,7 +313,8 @@ function upK(now) {
   for (let i = 0; i < N; i++) { const o = p, c = p * (1.004 + 0.002 * Math.sin(i)); k.t.push(t0 + i * H); k.o.push(o); k.c.push(c); k.h.push(c * 1.002); k.l.push(o * 0.998); k.v.push(100 + i); p = c; }
   return k;
 }
-test('konto I: obserwuje scenariusz, wchodzi dopiero po wybiciu szczytu, stop i cel ze scenariusza', async () => {
+test('(stary tryb I, bez wejścia od razu) konto I: obserwuje scenariusz, wchodzi dopiero po wybiciu szczytu, stop i cel ze scenariusza', async () => {
+  B.ACCOUNTS.I.early = false; try {
   const now = Date.UTC(2026, 10, 25, 10, 20);
   const k = upK(now); const last = k.c[k.c.length - 1]; const lvl = Math.max(k.h[k.h.length - 1], k.h[k.h.length - 2]);
   const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
@@ -337,8 +338,10 @@ test('konto I: obserwuje scenariusz, wchodzi dopiero po wybiciu szczytu, stop i 
   // cofnięcie → wyjście na ciągniętym stopie z zyskiem
   await B.runAccount('I', st, r, byBase, async () => [{ t: now + H + 10 * 6e4, dur: M5, o: last * 1.04, h: last * 1.041, l: last * 1.0, c: last * 1.0 }], now + 2 * H);
   assert.strictEqual(st.closed.length, 1); assert.strictEqual(st.closed[0].reason, 'ciągnięty stop'); assert.ok(st.closed[0].net > 0);
+  } finally { B.ACCOUNTS.I.early = true; }
 });
-test('konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
+test('(stary tryb I, bez wejścia od razu) konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
+  B.ACCOUNTS.I.early = false; try {
   const now = Date.UTC(2026, 10, 25, 10, 20);
   const k = upK(now); const last = k.c[k.c.length - 1];
   const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
@@ -349,8 +352,10 @@ test('konto I: rezygnuje, gdy cena dotknie stopu przed wybiciem', async () => {
   await B.runAccount('I', st, r, byBase, async () => [{ t: now + 10 * 6e4, dur: M5, o: last, h: last * 1.0001, l: last * 0.975, c: last * 0.976 }], now + H);
   assert.strictEqual(st.positions.length + st.closed.length + st.watch.length, 0);
   assert.ok(st.log[0].includes('dotknęła stopu przed wybiciem'));
+  } finally { B.ACCOUNTS.I.early = true; }
 });
-test('konto I: nie wchodzi, gdy cena przeskoczy wybicie tak daleko, że do celu zostaje < 1,2R', async () => {
+test('(stary tryb I, bez wejścia od razu) konto I: nie wchodzi, gdy cena przeskoczy wybicie tak daleko, że do celu zostaje < 1,2R', async () => {
+  B.ACCOUNTS.I.early = false; try {
   const now = Date.UTC(2026, 10, 25, 10, 20);
   const k = upK(now); const last = k.c[k.c.length - 1];
   const coin = { ex: 'bingx', base: 'TTT', sym: 'TTT-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } };
@@ -362,6 +367,32 @@ test('konto I: nie wchodzi, gdy cena przeskoczy wybicie tak daleko, że do celu 
   await B.runAccount('I', st, r, byBase, async () => [{ t: now + 10 * 6e4, dur: M5, o: last * 1.03, h: last * 1.032, l: last * 1.029, c: last * 1.031 }], now + H);
   assert.strictEqual(st.positions.length + st.closed.length, 0);
   assert.ok(st.log.some(l => l.includes('przeskoczyła za daleko')));
+  } finally { B.ACCOUNTS.I.early = true; }
+});
+
+test('konto I: wchodzi od razu, potwierdzenie (wybicie + ≥2/5) zostawia stop, brak potwierdzenia = stop na wejście', async () => {
+  const now = Date.UTC(2026, 10, 27, 10, 20);
+  const k = upK(now); const last = k.c[k.c.length - 1]; const lvl = Math.max(k.h[k.h.length - 1], k.h[k.h.length - 2]);
+  const mkCoin = b => ({ ex: 'bingx', base: b, sym: b + '-USDT', price: last, res: { '1h': { price: last, raw: {}, big: { long: { p: 0.45, prior: 0.32, skill: 0.02, weak: false }, short: { p: 0.2, prior: 0.3, skill: 0, weak: true }, levels: { longT: last * 1.04, longS: last * 0.98, shortT: last * 0.96, shortS: last * 1.02 } } } } });
+  const r = { generatedAt: new Date(now).toISOString(), coins: [mkCoin('AAA')], klines1h: async () => k, klines4h: async () => null };
+  const st = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  const byBase = new Map([['AAA', { price: last, qv: 1e7, sym: 'AAA-USDT' }]]);
+  await B.runAccount('I', st, r, byBase, async () => [], now);
+  assert.strictEqual(st.positions.length, 1, 'wejście od razu');
+  const p = st.positions[0]; assert.ok(p.confirm && Math.abs(p.entry - last * 1.0005) / last < 0.01);
+  const stop0 = p.stop;
+  // wybicie poziomu w 2. godzinie → potwierdzone, stop bez zmian
+  await B.runAccount('I', st, r, byBase, async () => [{ t: now + H, dur: M5, o: last, h: lvl * 1.002, l: last * 0.999, c: lvl }], now + 2 * H);
+  assert.ok(!p.confirm && p.confirmed, 'potwierdzone: ' + st.log[0]);
+  assert.strictEqual(p.stop, stop0);
+  // druga pozycja bez wybicia przez 3 godz. → stop na wejście
+  const st2 = mkAcct({ day: { date: B.dayKey(now), startEquity: 1000, halted: false } });
+  await B.runAccount('I', st2, r, byBase, async () => [], now);
+  const p2 = st2.positions[0];
+  await B.runAccount('I', st2, r, byBase, async () => [{ t: now + H, dur: M5, o: last, h: last * 1.0003, l: last * 0.995, c: last * 1.0001 }], now + 3 * H + 6e4);
+  assert.ok(!p2.confirm);
+  assert.ok(Math.abs(p2.stop - p2.entry) < 1e-12, 'stop na wejściu');
+  assert.ok(st2.log.some(l => l.includes('stop przesunięty na wejście')));
 });
 
 test('limit korelacji: maks. 2 nowe pozycje w tym samym kierunku na godzinę (konto F)', async () => {

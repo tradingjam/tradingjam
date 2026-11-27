@@ -50,7 +50,7 @@ const ACCOUNTS = {
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true },
   H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true },
-  I: { name: 'Trader – sam szuka potwierdzeń', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1), a bot sam ocenia wykres jak trader. Wchodzi dopiero, gdy w ciągu 3 godzin cena wybije szczyt (dołek) 2 ostatnich świec, zanim dotknie stopu, i gdy zbierze co najmniej 2 z 5 punktów: nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw. Stop i cel jak w scenariuszu; po dojściu do celu nie zamyka – połowa drogi do celu zostaje zabezpieczona, a stop idzie za ceną (1R za najlepszym poziomem), pozycja do 48 godz. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true },
+  I: { name: 'Trader – wchodzi od razu, potwierdza w 3 godz.', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1). Bot wchodzi od razu po cenie BingX (poziomy celu i stopu w tych samych % co w aplikacji), a potem przez 3 godziny ocenia wykres jak trader: czeka na wybicie szczytu (dołka) 2 ostatnich świec przy co najmniej 2 z 5 punktów (nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw). Potwierdzenie = pozycja zostaje. Brak potwierdzenia w 3 godz. = stop przesuwa się na cenę wejścia. Po dojściu do celu nie zamyka – połowa drogi do celu zostaje zabezpieczona, a stop idzie za ceną (1R za najlepszym poziomem), pozycja do 48 godz. Ryzyko 1% na pozycję, maks. 10 pozycji. Konto zresetowane 27.11.2026 (nowa zasada wejścia).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true, early: true, resetTag: '2026-11-27-wczesne' },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
@@ -515,6 +515,33 @@ async function traderWatch(key, st, res, barsFor, byBase, now) {
     else { w.armedAt = null; w.armedUntil = null; }
   }
 }
+// 0c. konto I (wejście od razu): w ciągu 3 godz. wybicie szczytu/dołka 2 świec przy ≥ 2/5 punktów = pozycja zostaje,
+// brak potwierdzenia = stop na cenę wejścia
+async function traderConfirm(key, st, res, barsFor, now) {
+  for (const p of st.positions) {
+    if (!p.confirm) continue;
+    const L = p.side === 'LONG', c = p.confirm; let ok = null;
+    const bars = (await barsFor(p.sym)) || [];
+    let k = null, k4 = null; try { k = await res.klines1h(p.sym); k4 = res.klines4h ? await res.klines4h(p.sym) : null; } catch (e) { }
+    for (const b of bars) {
+      if (b.t < c.sigT || b.t + b.dur > Math.min(now, c.until) || b.t + b.dur <= (c.checked || 0)) continue;
+      c.checked = b.t + b.dur;
+      if (!(L ? b.h >= c.lvl : b.l <= c.lvl) || !k) continue;
+      let q = k.t.length - 1; while (q >= 0 && k.t[q] + 36e5 > b.t) q--;
+      if (q < 25) continue;
+      const s = traderScore(k, k4, q, L);
+      if (s.sc >= TR.minScore) { ok = `${s.sc}/5: ${s.txt}`; break; }
+      c.lastTxt = `${s.sc}/5: ${s.txt}`;
+    }
+    if (ok) { delete p.confirm; p.confirmed = true; st.log.unshift(`${stamp(now)} potwierdzone ${p.base} ${p.side} (trader): wybicie ${c.lvl.toPrecision(5)} ✓, ${ok} – pozycja zostaje`); continue; }
+    if (now >= c.until) {
+      delete p.confirm;
+      const ns = L ? Math.max(p.stop, p.entry) : Math.min(p.stop, p.entry);
+      if (ns !== p.stop) { p.stop = ns; p.risk = openRisk(p); }
+      st.log.unshift(`${stamp(now)} brak potwierdzenia ${p.base} ${p.side} (trader) w 3 godz.${c.lastTxt ? ' (ostatnio: ' + c.lastTxt + ')' : ''} – stop przesunięty na wejście ${p.entry.toPrecision(5)}`);
+    }
+  }
+}
 // 3. nowe scenariusze do obserwacji
 async function traderEntries(key, st, res, byBase, now, skip) {
   st.watch = st.watch || []; st.seen = st.seen || {};
@@ -536,6 +563,13 @@ async function traderEntries(key, st, res, byBase, now, skip) {
     if (L ? !(w.stop < live.price && w.lvl < w.target) : !(w.stop > live.price && w.lvl > w.target)) { skip('poziomy poza zakresem'); continue; }
     // wejście na poziomie wybicia musi dawać sensowny układ (≥ 1,2 : 1), inaczej szkoda obserwować
     if (rrAt(w, w.lvl) < TR.minRR) { skip('poziom wybicia za blisko celu'); st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): poziom wybicia ${w.lvl.toPrecision(5)} za blisko celu – zysk : ryzyko tylko ${rrAt(w, w.lvl).toFixed(1)} : 1`); continue; }
+    if (ACCOUNTS[key].early) {
+      const fp = fill(live.price, w.side, true);
+      const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader: wejście od razu', fillType: 'od razu', why: `model ${(x.d.p * 100).toFixed(0)}%, przewaga +${(x.lift * 100).toFixed(0)} pkt · potwierdzenie (wybicie ${w.lvl.toPrecision(5)} i ≥ 2/5) w ciągu 3 godz., inaczej stop na wejście`, limit: live.price }, fp, now, byBase, key);
+      if (typeof r === 'string') { skip(r); st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): ${r}`); continue; }
+      r.confirm = { lvl: w.lvl, sigT: now, until: now + TR.watchMs };
+      added++; await queueChart(res, { ...w, acct: 'I (trader)', acctKey: 'I' }, 'WEJŚCIE od razu – czeka na potwierdzenie 3 godz.', { entry: fp }); continue;
+    }
     st.watch.push(w); added++;
     st.log.unshift(`${stamp(now)} obserwuje ${w.base} ${w.side} (model ${(x.d.p * 100).toFixed(0)}%, przewaga +${(x.lift * 100).toFixed(0)} pkt) – czeka na potwierdzenie do 3 godz.`);
   }
@@ -551,7 +585,8 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   if (st.day.startEquity === undefined) st.day.startEquity = st.day.startBalance || st.balance; // stary format
   // 0b. konto F: wykonanie / wygaśnięcie zleceń z limitem (przed rozliczeniem – nowa pozycja rozlicza się od świecy wejścia)
   if (ACCOUNTS[key].copy) { CHART_RES = res; await copyFills(key, st, barsFor, byBase, now); }
-  if (ACCOUNTS[key].trader) await traderWatch(key, st, res, barsFor, byBase, now);
+  if (ACCOUNTS[key].trader && ACCOUNTS[key].early) await traderConfirm(key, st, res, barsFor, now);
+  else if (ACCOUNTS[key].trader) await traderWatch(key, st, res, barsFor, byBase, now);
   // 1. rozliczanie
   for (const p of [...st.positions]) {
     const bars = await barsFor(p.sym);
@@ -586,6 +621,7 @@ async function runAccount(key, st, res, byBase, barsFor, now) {
   }
   else if (st.observe) skip('tryb obserwacji');
   else if (ACCOUNTS[key].copy) { CHART_RES = res; opened = await copyEntries(key, st, res.history, byBase, now, skip); }
+  else if (ACCOUNTS[key].trader && ACCOUNTS[key].early) await traderEntries(key, st, res, byBase, now, skip);
   else if (ACCOUNTS[key].trader) { await traderEntries(key, st, res, byBase, now, skip); await traderWatch(key, st, res, async () => [], byBase, now); }
   else {
     const list = ACCOUNTS[key].ind ? await indCandidates(res, byBase, now) : candidates(key, res);
@@ -658,7 +694,18 @@ async function main() {
     console.log('Bot: reset kont (nowe zasady) – poprzedni okres zapisany w archiwum');
     prev = null;
   }
-  for (const key of Object.keys(ACCOUNTS)) state.accounts[key] = { ...(prev && prev.accounts && prev.accounts[key] ? prev.accounts[key] : fresh(now)), ...ACCOUNTS[key] };
+  for (const key of Object.keys(ACCOUNTS)) {
+    let old = prev && prev.accounts && prev.accounts[key] ? prev.accounts[key] : null;
+    // reset pojedynczego konta (nowa zasada): poprzedni okres do archiwum, konto od nowa z 1000 USDT
+    if (old && ACCOUNTS[key].resetTag && old.acctReset !== ACCOUNTS[key].resetTag) {
+      state.archive.unshift({ tag: `${key}: ${old.acctReset || 'start'}`, until: now, accounts: { [key]: { name: old.name, startedAt: old.startedAt, balance: old.balance, closed: old.closed, openAtReset: old.positions,
+        n: old.closed.length, wins: old.closed.filter(p => p.net > 0).length, net: +old.closed.reduce((x, p) => x + p.net, 0).toFixed(2) } } });
+      console.log(`Bot: reset konta ${key} (${ACCOUNTS[key].resetTag}) – poprzedni okres w archiwum`);
+      old = null;
+    }
+    state.accounts[key] = { ...(old || { ...fresh(now), acctReset: ACCOUNTS[key].resetTag }), ...ACCOUNTS[key] };
+    if (!state.accounts[key].acctReset && ACCOUNTS[key].resetTag) state.accounts[key].acctReset = ACCOUNTS[key].resetTag;
+  }
 
   const tick = await X.bingxTickers();
   if (!tick.length) throw new Error('brak tickerów BingX');
@@ -735,4 +782,4 @@ async function sendTelegram(text) {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { chartCaption, _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { traderConfirm, ACCOUNTS, chartCaption, _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
