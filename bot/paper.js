@@ -49,7 +49,7 @@ const ACCOUNTS = {
   D: { name: 'Ciągnięcie zysku', desc: 'Jak A, ale po dojściu do celu pozycja zostaje otwarta, a stop idzie za ceną (zabezpiecza zysk). Pomija scenariusze ze stopem bliżej niż 1,3%.' },
   E: { name: 'Najlepsze z najlepszych', desc: 'Idealna okazja dla każdego scenariusza: model porównuje układy 2:1, 1:1 i 1:2 i bierze ten z najwyższym oczekiwanym zyskiem po kosztach (łączy szansę trafienia z wielkością wygranej). Tylko scenariusze z oczekiwanym wynikiem ≥ +0,15R. W układzie 2:1 po dojściu do celu ciągnie zysk jak konto D. Dodatkowo gra z trendem na świecach dziennych – wybicie 55 dni albo odbicie do EMA20 przy słabym wolumenie (longi i shorty), ciągnięty stop, do 42 dni. Połowa ryzyka (0,5% na pozycję), maks. 6 pozycji 24 godz. + 3 trendowe.', riskPct: 0.005, maxOpen: 6, maxTrend: 3 },
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true },
-  H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true },
+  H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Od 27.11.2026 pomija scenariusze 24 godz., w których cel leży przy wsparciu (dla longa: oporze) przetestowanym co najmniej 2 razy w ostatnich 48 godz. – np. short z celem na podwójnym dołku (backtest 513 scenariuszy: takie wejścia średnio −0,15R, reszta +0,27R). Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true, lvlFilter: true },
   I: { name: 'Trader – wchodzi od razu, potwierdza w 3 godz.', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1). Bot wchodzi od razu po cenie BingX (poziomy celu i stopu w tych samych % co w aplikacji), a potem przez 3 godziny ocenia wykres jak trader: czeka na wybicie szczytu (dołka) 2 ostatnich świec przy co najmniej 2 z 5 punktów (nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw). Potwierdzenie = pozycja zostaje. Brak potwierdzenia w 3 godz. = stop przesuwa się na cenę wejścia. Po dojściu do celu nie zamyka – połowa drogi do celu zostaje zabezpieczona, a stop idzie za ceną (1R za najlepszym poziomem), pozycja do 48 godz. Ryzyko 1% na pozycję, maks. 10 pozycji. Konto zresetowane 27.11.2026 (nowa zasada wejścia).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true, early: true, resetTag: '2026-11-27-wczesne' },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
@@ -367,6 +367,23 @@ async function copyFills(key, st, barsFor, byBase, now) {
     }
   }
 }
+// Poziom przy celu: dołki (szczyty) lokalne z ±2 świec w ostatnich 48 zamkniętych świecach 1h; ≥ 2 w odległości ≤ 0,25 ATR = wsparcie (opór).
+// Zwraca poziom, jeśli leży ±0,5 ATR od celu (np. short z celem na podwójnym dołku), inaczej null. Ta sama zasada co levelAt w scripts/backtest-top.js.
+function levelNearTarget(k, now, long, target) {
+  if (!k || !k.t) return null;
+  let idx = k.t.length - 1; while (idx >= 0 && k.t[idx] + 36e5 > now) idx--;
+  if (idx < 52) return null;
+  let atr = 0; for (let i = idx - 13; i <= idx; i++) atr += Math.max(k.h[i] - k.l[i], Math.abs(k.h[i] - k.c[i - 1]), Math.abs(k.l[i] - k.c[i - 1])); atr /= 14;
+  if (!(atr > 0)) return null;
+  const pts = [];
+  for (let m = idx - 48; m <= idx - 2; m++) {
+    let ok = true; for (let x = m - 2; x <= m + 2; x++) if (x !== m && (long ? k.h[x] > k.h[m] : k.l[x] < k.l[m])) { ok = false; break; }
+    if (ok) pts.push(long ? k.h[m] : k.l[m]);
+  }
+  for (const a of pts) { const g = pts.filter(b => Math.abs(b - a) <= 0.25 * atr); if (g.length < 2) continue;
+    const lv = g.reduce((q, b) => q + b, 0) / g.length; if (Math.abs(lv - target) <= 0.5 * atr) return lv; }
+  return null;
+}
 // 3. nowe wejścia F
 async function copyEntries(key, st, hist, byBase, now, skip) {
   st.pending = st.pending || [];
@@ -381,6 +398,12 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
     const cb = E.cleanBase(p.base);
     if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { pass(p, 'już ma otwartą pozycję na tym coinie'); continue; }
     const L = p.dir === 'LONG';
+    if (ACCOUNTS[key].lvlFilter && p.iv === '1h' && CHART_RES && CHART_RES.klines1h) {
+      let k = null; try { k = await CHART_RES.klines1h(live.sym); } catch (e) { }
+      const tg = p.ex !== 'bingx' ? p.target * live.price / p.price : p.target;
+      const lv = levelNearTarget(k, now, L, tg);
+      if (lv !== null) { pass(p, `cel przy ${L ? 'oporze' : 'wsparciu'} ${lv.toPrecision(5)} przetestowanym 2× (${L ? 'podwójny szczyt' : 'podwójny dołek'})`); continue; }
+    }
     const base = { id: `${now}-${live.sym}`, pickId: p.id, pickT: p.t, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
       spreadPct: live.bid > 0 && live.ask > 0 ? +((live.ask - live.bid) / live.price * 100).toFixed(3) : null };
     if (p.ex !== 'bingx') {
@@ -782,4 +805,4 @@ async function sendTelegram(text) {
 }
 
 if (require.main === module) main().catch(e => { console.error('Bot – błąd:', e.message); process.exit(1); });
-module.exports = { traderConfirm, ACCOUNTS, chartCaption, _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };
+module.exports = { levelNearTarget, traderConfirm, ACCOUNTS, chartCaption, _queueChart: (...a) => queueChart(...a), _PHOTOS: PHOTOS, traderScore, traderCandidates, buildNotice, indSignal, limitFill, copyCandidates, observeCheck, settle, mergeBars, loadState, saveState, validateState, runAccount, rejectEntry, dayKey, openRisk, BASE, H_MS };

@@ -441,3 +441,12 @@ test('podpis wykresu: konto-kopia bez poziomu wybicia nie wywraca wysyłki', () 
   const i = chartCaption({ base: 'HUMA', side: 'SHORT', status: 'czeka na wybicie', lvl: 0.006792, stop: 0.00697, target: 0.00652, sub: 'konto I (trader)' });
   assert.match(i, /wybicie 0\.006792/);
 });
+
+test('H: wykrywa cel na podwójnym dołku (wsparcie przetestowane 2×)', () => {
+  const n = 80, H = 36e5, k = { t: [], o: [], h: [], l: [], c: [] };
+  for (let i = 0; i < n; i++) { let c = 100 + Math.sin(i / 3) * 0.5; if (i === 50 || i === 62) c = 96; k.t.push(i * H); k.c.push(c); k.o.push(c); k.h.push(c + 0.5); k.l.push(c - 0.5); }
+  const now = n * H;
+  assert.ok(Math.abs(B.levelNearTarget(k, now, false, 95.6) - 95.5) < 0.01);
+  assert.strictEqual(B.levelNearTarget(k, now, false, 92), null);
+  assert.strictEqual(B.levelNearTarget(k, now, true, 104), null);
+});
