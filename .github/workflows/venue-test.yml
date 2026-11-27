@@ -1,0 +1,15 @@
+name: venue-test
+on: workflow_dispatch
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: |
+          node -e "
+          const {VENUES}=require('./bot/venues.js');
+          (async()=>{for(const [k,v] of Object.entries(VENUES)){try{const t=await v.tickers();const s=t.find(x=>/^(HYPE|BTC|XBT)/.test(x.base))||t[0];
+          const a=await v.klines(s.sym,'1h',200),b=await v.klines(s.sym,'5m',288);
+          console.log('VT',k,t.length,'coinow',s.sym,s.price,s.bid,s.ask,'1h:',a.t.length,new Date(a.t.at(-1)).toISOString(),a.c.at(-1),'5m:',b.t.length,new Date(b.t.at(-1)).toISOString())}catch(e){console.log('VT',k,'ERR',e.message)}}})()"
