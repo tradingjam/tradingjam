@@ -1,0 +1,29 @@
+name: fetch-instruments
+on: workflow_dispatch
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch
+        run: |
+          get() { echo "URL $1"; curl -s -m 30 -A "Mozilla/5.0" "$1" -o out.json -w "HTTP %{http_code}\n"; python3 - "$1" <<'P'
+          import json,sys,re
+          try: d=json.load(open('out.json'))
+          except Exception as e: print('NOJSON', open('out.json').read()[:200]); sys.exit()
+          L=d.get('instruments') or d.get('data') or []
+          out=set()
+          for x in L:
+              s=x.get('symbol') or x.get('instId') or ''
+              t=x.get('type') or x.get('instType') or ''
+              st=x.get('tradeable', x.get('state','live'))
+              out.add((s,t,str(st),x.get('expTime','') or x.get('lastTradingTime','')))
+          print('COUNT',len(out))
+          for s in sorted(out): print('I',*s)
+          P
+          }
+          get "https://futures.kraken.com/derivatives/api/v3/instruments"
+          get "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+          get "https://eea.okx.com/api/v5/public/instruments?instType=FUTURES"
+          get "https://eea.okx.com/api/v5/public/instruments?instType=SWAP"
+          get "https://my.okx.com/api/v5/public/instruments?instType=FUTURES"
+          get "https://my.okx.com/api/v5/public/instruments?instType=SWAP"
