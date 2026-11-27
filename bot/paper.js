@@ -562,7 +562,7 @@ async function traderEntries(key, st, res, byBase, now, skip) {
       lvl: L ? Math.max(k.h[q], k.h[q - 1]) : Math.min(k.l[q], k.l[q - 1]), stop: x.d.stop * kx, target: x.d.target * kx, p: x.d.p, lift: x.lift, src: x.co.ex };
     if (L ? !(w.stop < live.price && w.lvl < w.target) : !(w.stop > live.price && w.lvl > w.target)) { skip('poziomy poza zakresem'); continue; }
     // wejście na poziomie wybicia musi dawać sensowny układ (≥ 1,2 : 1), inaczej szkoda obserwować
-    if (rrAt(w, w.lvl) < TR.minRR) { skip('poziom wybicia za blisko celu'); st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): poziom wybicia ${w.lvl.toPrecision(5)} za blisko celu – zysk : ryzyko tylko ${rrAt(w, w.lvl).toFixed(1)} : 1`); continue; }
+    if (!ACCOUNTS[key].early && rrAt(w, w.lvl) < TR.minRR) { skip('poziom wybicia za blisko celu'); st.log.unshift(`${stamp(now)} pominięto ${w.base} ${w.side} (trader): poziom wybicia ${w.lvl.toPrecision(5)} za blisko celu – zysk : ryzyko tylko ${rrAt(w, w.lvl).toFixed(1)} : 1`); continue; }
     if (ACCOUNTS[key].early) {
       const fp = fill(live.price, w.side, true);
       const r = copyOpen(st, { ...w, mode: 'trader', label: 'trader: wejście od razu', fillType: 'od razu', why: `model ${(x.d.p * 100).toFixed(0)}%, przewaga +${(x.lift * 100).toFixed(0)} pkt · potwierdzenie (wybicie ${w.lvl.toPrecision(5)} i ≥ 2/5) w ciągu 3 godz., inaczej stop na wejście`, limit: live.price }, fp, now, byBase, key);
