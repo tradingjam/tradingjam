@@ -416,7 +416,7 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
       const k = live.price / p.price, px = fill(live.price, p.dir, true);
       const o = { ...base, limit: live.price, target: p.target * k, stop: p.stop * k, fillType: 'od razu (scenariusz z ' + ({ okx: 'OKX', bingx: 'BingX' }[p.ex] || 'Binance') + ', ceny z ' + VN + ')' };
       const r = copyOpen(st, o, px, now, byBase, key);
-      if (typeof r === 'string') pass(p, r); else { opened++; if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – po cenie BingX', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji (${p.ex === 'okx' ? 'OKX' : 'Binance'}) · ${IV_LABEL[o.iv] || o.iv} · cel i stop w tych samych %` }); }
+      if (typeof r === 'string') pass(p, r); else { opened++; if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – po cenie ' + VN, { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji (${({ okx: 'OKX', bingx: 'BingX' })[p.ex] || 'Binance'}) · ${IV_LABEL[o.iv] || o.iv} · cel i stop w tych samych %` }); }
       continue;
     }
     // scenariusz z BingX: zlecenie z limitem dokładnie po cenie z aplikacji
@@ -483,18 +483,18 @@ function traderScore(k, k4, q, long) {
 const PHOTOS = [];
 let CHART_RES = null; // wyniki skanu (świece) dla wykresów konta F
 async function queueChart(res, w, status, extra = {}) {
-  if (!process.env.TELEGRAM_TOKEN || PHOTOS.length >= 6) return;
+  if (!process.env.TELEGRAM_TOKEN || PHOTOS.length >= 10) return;
   // to samo wejście kilku kont (F i H z tego samego scenariusza) = jeden wykres z dopiskiem obu kont
   if (w.pickId) {
     const same = PHOTOS.find(ph => ph.pickId === w.pickId && ph.o.status === status);
     if (same) { if (!same.accts.includes(w.acctKey)) { same.accts.push(w.acctKey); same.o.sub = same.o.sub.replace(/konto .*$/, `konto ${same.accts.join(' + ')} (to samo wejście)`); } return; }
   }
-  try { const k = await res.klines1h(w.sym); if (k) PHOTOS.push({ k, pickId: w.pickId || null, accts: [w.acctKey || 'I'], o: { base: w.base, side: w.side, status, lvl: w.lvl, stop: w.stop, target: w.target, sub: `model ${((w.p || 0) * 100).toFixed(0)}% · przewaga +${((w.lift || 0) * 100).toFixed(0)} pkt · konto ${w.acct || 'I (trader)'}`, checks: (w.scoreTxt || w.lastTxt || '').replace(/, /g, '  '), ...extra } }); } catch (e) { }
+  try { const k = w.venue ? await VENUES[w.venue].klines(w.sym, '1h', 120) : await res.klines1h(w.sym); if (k) PHOTOS.push({ k, pickId: w.pickId || null, accts: [w.acctKey || 'I'], o: { base: w.base, side: w.side, status, lvl: w.lvl, stop: w.stop, target: w.target, sub: `model ${((w.p || 0) * 100).toFixed(0)}% · przewaga +${((w.lift || 0) * 100).toFixed(0)} pkt · konto ${w.acct || 'I (trader)'}`, checks: (w.scoreTxt || w.lastTxt || '').replace(/, /g, '  '), venueName: w.venue ? VENUES[w.venue].name : 'BingX', ...extra } }); } catch (e) { }
 }
-const COPY_CHART = { F: 'F (kopia aplikacji)', H: 'H (kopia + ciągnięcie zysku)' };
+const COPY_CHART = { F: 'F (kopia aplikacji)', H: 'H (kopia + ciągnięcie zysku)', O: 'O (OKX Europe)', K: 'K (Kraken)' };
 async function copyChart(key, o, status, extra) {
   if (!COPY_CHART[key] || !CHART_RES) return;
-  await queueChart(CHART_RES, { ...o, acct: COPY_CHART[key], acctKey: key }, status, extra);
+  await queueChart(CHART_RES, { ...o, acct: COPY_CHART[key], acctKey: key, venue: ACCOUNTS[key].venue || null }, status, extra);
 }
 const closedIdx = (k, now) => { let q = k.t.length - 1; while (q >= 0 && k.t[q] + 36e5 > now) q--; return q; };
 // 0. obserwowane scenariusze: wybicie (zlecenie stop wykonane na 5m), stop przed wybiciem, uzbrajanie na kolejną godzinę

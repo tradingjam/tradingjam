@@ -58,7 +58,7 @@ function chartSVG(k, o) {
   const sideCol = o.side === 'LONG' ? C.up : C.down;
   const head = `<text x="${PL}" y="40" font-size="30" font-family="DejaVu Sans, Arial" font-weight="bold" fill="${C.text}">${esc(o.base)} <tspan fill="${sideCol}">${esc(o.side)}</tspan> <tspan font-size="20" fill="${C.dim}" font-weight="normal">· ${esc(o.status)}</tspan></text>
     <text x="${PL}" y="70" font-size="16" font-family="DejaVu Sans, Arial" fill="${C.dim}">${esc(o.sub || '')}</text>
-    <text x="${W - PR}" y="40" text-anchor="end" font-size="16" font-family="DejaVu Sans, Arial" fill="${C.dim}">świece 1h (4 dni) · BingX · tradingjam</text>
+    <text x="${W - PR}" y="40" text-anchor="end" font-size="16" font-family="DejaVu Sans, Arial" fill="${C.dim}">świece 1h (4 dni) · ${o.venueName || 'BingX'} · tradingjam</text>
     <text x="${PL}" y="${VT - 8}" font-size="13" font-family="DejaVu Sans, Arial" fill="${C.dim}">wolumen · linia pomarańczowa = EMA20</text>`;
   const foot = `<text x="${PL}" y="${H - 22}" font-size="15" font-family="DejaVu Sans, Arial" fill="${C.text}">${esc(o.checks || '')}</text>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${head}${g}${foot}</svg>`;
