@@ -288,6 +288,43 @@ function sweepAt(k, idx, atr, long, A, vol = false) {
   for (let m = Math.max(0, idx - 2); m <= idx; m++) { const hi = hit(m, true), lo = hit(m, false); if (long ? lo : hi) w = true; if (long ? hi : lo) a = true; }
   return { w, a };
 }
+// „Wcześniejsze wejście”: konto wchodzi od razu po cenie z aplikacji (jak F), a checklistę tradera używa do prowadzenia pozycji:
+// w ciągu `win` świec musi przyjść wybicie szczytu/dołka 2 ostatnich świec przy ≥ minScore punktach – wtedy zostaje (ciągnięcie ½ celu),
+// jeśli nie – wychodzi wcześniej na zamknięciu świecy `win` (mała strata albo mały zysk zamiast pełnego stopu).
+// mode 'cut' = wyjście bez potwierdzenia; 'be' = bez potwierdzenia stop przesuwa się na wejście (bez wcześniejszego wyjścia).
+function earlySim(k, i, atr, lev, long, H, A, minScore, win = 3, mode = 'cut') {
+  const n = k.c.length, e = k.c[i], st = lev[1] * atr, tg = lev[0] * atr;
+  if (i < 30 || i + 1 >= n) return null;
+  let stop = long ? e - st : e + st; const target = long ? e + tg : e - tg, risk = st;
+  const lvl = long ? Math.max(k.h[i], k.h[i - 1]) : Math.min(k.l[i], k.l[i - 1]);
+  let ok = false, R = null, jj, on = false, best = e;
+  const maxJ = Math.min(n - 1, i + 2 * H);
+  for (jj = i + 1; jj <= maxJ; jj++) {
+    if (long ? k.l[jj] <= stop : k.h[jj] >= stop) { R = on || ok ? (long ? Math.min(stop, k.o[jj]) - e : e - Math.max(stop, k.o[jj])) / risk : -1; if (!on && !ok && mode === 'be' && jj > i + win) R = (long ? Math.min(stop, k.o[jj]) - e : e - Math.max(stop, k.o[jj])) / risk; break; }
+    if (long ? k.h[jj] >= target : k.l[jj] <= target) on = true;
+    if (!ok && jj <= i + win && (long ? k.h[jj] >= lvl : k.l[jj] <= lvl)) {
+      const q = jj - 1; let sc = 0;
+      const recent = long ? Math.min(k.l[q], k.l[q - 1]) : Math.max(k.h[q], k.h[q - 1]); let ext = recent;
+      for (let m = q - 23; m <= q - 2; m++) ext = long ? Math.min(ext, k.l[m]) : Math.max(ext, k.h[m]);
+      if (long ? recent > ext : recent < ext) sc++;
+      if (long ? (A.rsi[q] >= 40 && A.rsi[q] <= 75 && A.rsi[q] > A.rsi[q - 2]) : (A.rsi[q] <= 60 && A.rsi[q] >= 25 && A.rsi[q] < A.rsi[q - 2])) sc++;
+      if (long ? k.c[q] > A.ema[q] : k.c[q] < A.ema[q]) sc++;
+      if (A.vav[q] && k.v[q] >= A.vav[q]) sc++;
+      if (A.t4 && A.t4[q] !== null && (long ? A.t4[q] >= 0 : A.t4[q] <= 0)) sc++;
+      if (sc >= minScore) ok = true;
+    }
+    if (!ok && !on && jj === i + win) {
+      if (mode === 'cut') { R = (long ? k.c[jj] - e : e - k.c[jj]) / risk; break; }
+      if (mode === 'be') stop = long ? Math.max(stop, e) : Math.min(stop, e);
+    }
+    if (on) { best = long ? Math.max(best, k.h[jj]) : Math.min(best, k.l[jj]);
+      const ns = long ? Math.max(e + tg * 0.5, best - risk) : Math.min(e - tg * 0.5, best + risk);
+      if (long ? ns > stop : ns < stop) stop = ns; }
+    if (!on && jj >= i + H && !(ok)) { R = (long ? k.c[jj] - e : e - k.c[jj]) / risk; break; }
+  }
+  if (R === null) { jj = Math.min(jj, maxJ); R = (long ? k.c[jj] - e : e - k.c[jj]) / risk; }
+  return { R: R - 0.002 * e / risk, bars: jj - i };
+}
 function traderSim(k, i, atr, lev, long, H, A, minScore, entryMode = 'now', waitBars = 6, trail = null, sw = null) {
   const n = k.c.length, e0 = k.c[i], st = lev[1] * atr, tg = lev[0] * atr;
   const stop = long ? e0 - st : e0 + st, target = long ? e0 + tg : e0 - tg;
@@ -370,6 +407,7 @@ async function worker() {
           const a = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, false), b = tradeSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, true);
           const cf = {}; for (const rule of ['break']) { const c = confirmSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, rule); cf[rule] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           for (const [nm, em, tr, sw] of [['tr2', 'now', null], ['tTr1', 'now', 'r1'], ['tHalf', 'now', 'half'], ['swPlus', 'now', 'half', 'plus'], ['swReq', 'now', 'half', 'req'], ['swReqV', 'now', 'half', 'reqV'], ['swBlock', 'now', 'half', 'block']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em, 6, tr, sw || null); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
+          for (const [nm, w, md] of [['eCut3', 3, 'cut'], ['eCut6', 6, 'cut'], ['eBe3', 3, 'be']]) { const c = earlySim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, w, md); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           const swF = sweepAt(k, r.i, rw.atr * SCALE, side === 'L', IA, false);
           if (!k._rsi) { const c = k.c, m = c.length, rs = new Array(m).fill(50); let g = 0, l = 0; for (let x = 1; x < m; x++) { const d = c[x] - c[x - 1], u = Math.max(d, 0), dn = Math.max(-d, 0); if (x <= 14) { g += u / 14; l += dn / 14; } else { g = (g * 13 + u) / 14; l = (l * 13 + dn) / 14; } if (x >= 14) rs[x] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } k._rsi = rs; }
           const fl = tradeSim(k, r.i, rw.atr * SCALE, LEV, side !== 'L', H, false);
@@ -668,6 +706,12 @@ async function main() {
     }
     const ext = picks.filter(x => (x.side === 'S' && x.rsi < 35) || (x.side === 'L' && x.rsi > 65));
     console.log(`RSI scenariusze „spóźnione” (short RSI<35 / long RSI>65): ${ext.length} z ${picks.length} · F śr. ${(ext.reduce((q, x) => q + x.RF, 0) / (ext.length || 1)).toFixed(2)}R · po odwróceniu śr. ${(ext.reduce((q, x) => q + x.RFf, 0) / (ext.length || 1)).toFixed(2)}R · pozostałe F śr. ${(picks.filter(x => !ext.includes(x)).reduce((q, x) => q + x.RF, 0) / Math.max(1, picks.length - ext.length)).toFixed(2)}R`);
+    console.log('\n--- Konto I: wcześniejsze wejście (od razu po cenie z aplikacji, potwierdzenie decyduje, czy zostaje) ---');
+    const EN = { F: 'F (kopia, bez potwierdzeń)', H: 'H (kopia + ciągnięcie)', tHalf: 'I teraz: czeka na wybicie', eCut3: 'I wcześniej: brak potw. w 3 godz. = wyjście', eCut6: 'I wcześniej: brak potw. w 6 godz. = wyjście', eBe3: 'I wcześniej: brak potw. w 3 godz. = stop na wejście' };
+    for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of Object.entries(EN)) {
+      const r = fhSim(picks, w, a, b, 2, 0);
+      console.log(`ENT ${lbl.padEnd(16)} ${nm.padEnd(46)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
+    }
     console.log('\n--- Wymiecenie płynności (knot poza szczyt/dołek z 20 świec i powrót do zakresu) ---');
     const SWN = { F: 'F bez zmian', 'F|SW': 'F tylko po wymieceniu (za nami)', 'F|SA': 'F bez wejść po wymieceniu przeciw', H: 'H bez zmian', 'H|SW': 'H tylko po wymieceniu', 'H|SA': 'H bez wejść po wymieceniu przeciw',
       tHalf: 'I bez zmian', swPlus: 'I + wymiecenie jako 6. punkt', swReq: 'I tylko po wymieceniu', swReqV: 'I tylko po wymieceniu z wolumenem', swBlock: 'I bez wejść po wymieceniu przeciw' };
