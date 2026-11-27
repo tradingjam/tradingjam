@@ -1,0 +1,27 @@
+name: fetch-lists
+on: workflow_dispatch
+jobs:
+  lists:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch
+        run: |
+          get() { echo "== $1"; curl -s -m 30 "$2" -o "$1.json"; echo "HTTP size $(wc -c < $1.json)"; }
+          get kraken https://futures.kraken.com/derivatives/api/v3/instruments
+          get okx_swap "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+          get myokx_swap "https://my.okx.com/api/v5/public/instruments?instType=SWAP"
+          get myokx_fut "https://my.okx.com/api/v5/public/instruments?instType=FUTURES"
+          get eeaokx_swap "https://eea.okx.com/api/v5/public/instruments?instType=SWAP"
+          get eeaokx_fut "https://eea.okx.com/api/v5/public/instruments?instType=FUTURES"
+          python3 - <<'P'
+          import json,os
+          for f in ['kraken','okx_swap','myokx_swap','myokx_fut','eeaokx_swap','eeaokx_fut']:
+              try: d=json.load(open(f+'.json'))
+              except Exception as e: print('LIST',f,'ERR',str(e)[:80]); continue
+              if f=='kraken':
+                  b=sorted({i.get('base') or i['symbol'].split('_')[1][:-3] for i in d.get('instruments',[]) if i.get('type')=='flexible_futures' and i.get('tradeable',True)})
+                  b=[x.replace('XBT','BTC') for x in b]
+              else:
+                  b=sorted({(i.get('ctValCcy') or i['instId'].split('-')[0]) for i in d.get('data',[]) if i.get('state','live')=='live' and (i.get('settleCcy') or 'USDT') in ('USDT','USD','USDC')})
+              print('LIST',f,len(b),','.join(b))
+          P
