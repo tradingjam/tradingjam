@@ -288,6 +288,23 @@ function sweepAt(k, idx, atr, long, A, vol = false) {
   for (let m = Math.max(0, idx - 2); m <= idx; m++) { const hi = hit(m, true), lo = hit(m, false); if (long ? lo : hi) w = true; if (long ? hi : lo) a = true; }
   return { w, a };
 }
+// Poziom przetestowany ≥ 2 razy na drodze do celu (np. podwójny dołek pod shortem): dołki (szczyty) lokalne z ±2 świec
+// w ostatnich 48 świecach; grupa ≥ 2 takich dołków w odległości ≤ 0,25 ATR = wsparcie. P = wsparcie między wejściem a celem,
+// T = wsparcie w pobliżu celu (±0,5 ATR). Dla longów analogicznie opór ze szczytów.
+function levelAt(k, idx, atr, long, tgMult) {
+  const e = k.c[idx], target = long ? e + tgMult * atr : e - tgMult * atr, pts = [];
+  for (let m = Math.max(2, idx - 48); m <= idx - 2; m++) {
+    let ok = true; for (let x = m - 2; x <= m + 2; x++) if (x !== m && (long ? k.h[x] > k.h[m] : k.l[x] < k.l[m])) { ok = false; break; }
+    if (ok) pts.push(long ? k.h[m] : k.l[m]);
+  }
+  let P = false, T = false;
+  for (let a = 0; a < pts.length; a++) { let cnt = 0, sum = 0;
+    for (let b = 0; b < pts.length; b++) if (Math.abs(pts[b] - pts[a]) <= 0.25 * atr) { cnt++; sum += pts[b]; }
+    if (cnt < 2) continue; const lv = sum / cnt;
+    const inPath = long ? (lv > e + 0.2 * atr && lv <= target + 0.25 * atr) : (lv < e - 0.2 * atr && lv >= target - 0.25 * atr);
+    if (inPath) P = true; if (Math.abs(lv - target) <= 0.5 * atr) T = true; }
+  return { P, T };
+}
 // „Wcześniejsze wejście”: konto wchodzi od razu po cenie z aplikacji (jak F), a checklistę tradera używa do prowadzenia pozycji:
 // w ciągu `win` świec musi przyjść wybicie szczytu/dołka 2 ostatnich świec przy ≥ minScore punktach – wtedy zostaje (ciągnięcie ½ celu),
 // jeśli nie – wychodzi wcześniej na zamknięciu świecy `win` (mała strata albo mały zysk zamiast pełnego stopu).
@@ -409,9 +426,10 @@ async function worker() {
           for (const [nm, em, tr, sw] of [['tr2', 'now', null], ['tTr1', 'now', 'r1'], ['tHalf', 'now', 'half'], ['swPlus', 'now', 'half', 'plus'], ['swReq', 'now', 'half', 'req'], ['swReqV', 'now', 'half', 'reqV'], ['swBlock', 'now', 'half', 'block']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em, 6, tr, sw || null); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           for (const [nm, w, md] of [['eCut3', 3, 'cut'], ['eCut6', 6, 'cut'], ['eBe3', 3, 'be']]) { const c = earlySim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, w, md); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           const swF = sweepAt(k, r.i, rw.atr * SCALE, side === 'L', IA, false);
+          const lvF = levelAt(k, r.i, rw.atr * SCALE, side === 'L', LEV[0]);
           if (!k._rsi) { const c = k.c, m = c.length, rs = new Array(m).fill(50); let g = 0, l = 0; for (let x = 1; x < m; x++) { const d = c[x] - c[x - 1], u = Math.max(d, 0), dn = Math.max(-d, 0); if (x <= 14) { g += u / 14; l += dn / 14; } else { g = (g * 13 + u) / 14; l = (l * 13 + dn) / 14; } if (x >= 14) rs[x] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } k._rsi = rs; }
           const fl = tradeSim(k, r.i, rw.atr * SCALE, LEV, side !== 'L', H, false);
-          cand.push({ side, swW: swF.w, swA: swF.a, rsi: k._rsi[r.i], RFf: fl.R, eFf: k.t[Math.min(r.i + fl.bars, n - 1)] + STEP, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
+          cand.push({ side, swW: swF.w, swA: swF.a, lvP: lvF.P, lvT: lvF.T, rsi: k._rsi[r.i], RFf: fl.R, eFf: k.t[Math.min(r.i + fl.bars, n - 1)] + STEP, t: k.t[r.i] + STEP, p: r.p, prior: r.prior, rskill: r.rskill, sf: a.stopFrac, RF: a.R, RH: b.R, eF: k.t[Math.min(r.i + a.bars, n - 1)] + STEP, eH: k.t[Math.min(r.i + b.bars, n - 1)] + STEP, cf });
         }
         parentPort.postMessage({ coin: t.ex + ':' + t.base, recs: { fh: cand }, pool: null }); continue;
       }
@@ -675,6 +693,8 @@ async function main() {
         const [wb, wm] = which.split('|'); const isRsi = wm && /^[sf]\d+$/.test(wm); const thr = isRsi ? +wm.slice(1) : 0;
         if (wm === 'SW' && !x.swW) continue;
         if (wm === 'SA' && x.swA) continue;
+        if (wm === 'LP' && x.lvP) continue;
+        if (wm === 'LT' && x.lvT) continue;
         const extreme = isRsi && ((x.side === 'S' && x.rsi < thr) || (x.side === 'L' && x.rsi > 100 - thr));
         if (extreme && wm[0] === 's') continue;
         if (extreme && wm[0] === 'f') { R = x.RFf; end = x.eFf; side = x.side === 'L' ? 'S' : 'L'; }
@@ -721,6 +741,15 @@ async function main() {
     }
     const sw1 = picks.filter(x => x.swW), sw2 = picks.filter(x => x.swA);
     console.log(`SWP sygnały z wymieceniem za nami: ${sw1.length} z ${picks.length} (śr. F ${(sw1.reduce((q, x) => q + x.RF, 0) / (sw1.length || 1)).toFixed(2)}R) · z wymieceniem przeciw: ${sw2.length} (śr. F ${(sw2.reduce((q, x) => q + x.RF, 0) / (sw2.length || 1)).toFixed(2)}R) · wszystkie: śr. F ${(picks.reduce((q, x) => q + x.RF, 0) / (picks.length || 1)).toFixed(2)}R`);
+    console.log('\n--- Wsparcie/opór przetestowany ≥ 2 razy na drodze do celu (np. podwójny dołek pod shortem) ---');
+    const LVN = { F: 'F bez zmian', 'F|LP': 'F bez wejść, gdy poziom na drodze do celu', 'F|LT': 'F bez wejść, gdy poziom przy celu', H: 'H bez zmian', 'H|LP': 'H bez wejść, gdy poziom na drodze', 'H|LT': 'H bez wejść, gdy poziom przy celu' };
+    for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of Object.entries(LVN)) {
+      const r = fhSim(picks, w, a, b, 2, 0);
+      console.log(`LVL ${lbl.padEnd(16)} ${nm.padEnd(44)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
+    }
+    const avg = (A, f) => (A.reduce((q, x) => q + f(x), 0) / (A.length || 1)).toFixed(2);
+    for (const [nm, key] of [['na drodze do celu', 'lvP'], ['przy celu', 'lvT']]) { const y = picks.filter(x => x[key]), no = picks.filter(x => !x[key]);
+      console.log(`LVL scenariusze z poziomem ${nm}: ${y.length} z ${picks.length} · F śr. ${avg(y, x => x.RF)}R, H śr. ${avg(y, x => x.RH)}R, trafione ${(y.filter(x => x.RF > 0).length / (y.length || 1) * 100).toFixed(0)}% · bez poziomu: F śr. ${avg(no, x => x.RF)}R, H śr. ${avg(no, x => x.RH)}R, trafione ${(no.filter(x => x.RF > 0).length / (no.length || 1) * 100).toFixed(0)}%`); }
     console.log('\n--- Ograniczenie korelacji (te same scenariusze, różne limity) ---');
     for (const [lbl, a, b] of [['cały test', from, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const w of ['F', 'H', 'tHalf']) for (const [ph, md, nm] of [[0, 0, 'bez limitu'], [2, 0, 'maks. 2/godz. w 1 kier.'], [1, 0, 'maks. 1/godz. w 1 kier.'], [2, 5, '2/godz. + maks. 5 otwartych w 1 kier.']]) {
       const r = fhSim(picks, w, a, b, ph, md);
