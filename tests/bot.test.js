@@ -405,7 +405,8 @@ test('limit korelacji: maks. 2 nowe pozycje w tym samym kierunku na godzinę (ko
   assert.strictEqual(st.positions.length, 2);
   assert.ok(st.log.some(l => l.includes('limit korelacji')));
 });
-test('konto I: nie obserwuje scenariusza, gdy poziom wybicia jest za blisko celu (< 1,2 : 1)', async () => {
+test('(stary tryb I) konto I: nie obserwuje scenariusza, gdy poziom wybicia jest za blisko celu (< 1,2 : 1)', async () => {
+  B.ACCOUNTS.I.early = false; try {
   const now = Date.UTC(2026, 10, 26, 10, 20);
   const k = upK(now); const last = k.c[k.c.length - 1];
   // cel tylko 0,5% nad ceną, a wybicie ~0,2% wyżej → zysk : ryzyko przy wybiciu < 1,2
@@ -415,6 +416,7 @@ test('konto I: nie obserwuje scenariusza, gdy poziom wybicia jest za blisko celu
   await B.runAccount('I', st, r, new Map([['TTT', { price: last, qv: 1e7, sym: 'TTT-USDT' }]]), async () => [], now);
   assert.strictEqual((st.watch || []).length, 0);
   assert.ok(st.log.some(l => l.includes('za blisko celu')));
+  } finally { B.ACCOUNTS.I.early = true; }
 });
 
 test('wykres: to samo wejście F i H = jeden wykres z dopiskiem obu kont', async () => {
