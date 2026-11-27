@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const E = require('../app/engine.js');
 const X = require('../app/exchanges.js');
+const { VENUES } = require('./venues.js');
 
 const BASE = {
   startBalance: 1000, riskPct: 0.01, maxOpenRisk: 0.05, maxOpen: 8, maxLeverage: 3,
@@ -51,6 +52,8 @@ const ACCOUNTS = {
   F: { name: 'Kopia aplikacji', desc: 'Gra dokładnie te zielone scenariusze, które widzisz w aplikacji i w historii (24 godz. i 3 dni, bez 14 dni) – nic więcej. Wejście zleceniem z limitem po cenie podanej w aplikacji (ważne 1 godzinę), cel i stop takie same jak w aplikacji. Scenariusze z Binance i OKX wchodzą od razu po cenie BingX, z celem i stopem w tych samych procentach co w aplikacji. Dzięki temu widać, ile z wyniku aplikacji zostaje po prowizjach. Ryzyko 1% na pozycję, maks. 10 pozycji (łącznie do 10% equity w otwartych pozycjach).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true },
   H: { name: 'Kopia aplikacji + ciągnięcie zysku', desc: 'Kandydat na jednego, docelowego bota: to samo co F (dokładnie zielone scenariusze z aplikacji, wejście po cenie z aplikacji, ten sam stop i cel), ale po dojściu do celu NIE zamyka pozycji – stop idzie za ceną 1R za najlepszym poziomem (zysk co najmniej +1R zostaje zabezpieczony), a pozycja może trwać do 2× dłużej niż scenariusz. Pomysł z konta D. Od 27.11.2026 pomija scenariusze 24 godz., w których cel leży przy wsparciu (dla longa: oporze) przetestowanym co najmniej 2 razy w ostatnich 48 godz. – np. short z celem na podwójnym dołku (backtest 513 scenariuszy: takie wejścia średnio −0,15R, reszta +0,27R). Ryzyko 1% na pozycję, maks. 10 pozycji.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, trail: true, lvlFilter: true },
   I: { name: 'Trader – wchodzi od razu, potwierdza w 3 godz.', desc: 'Model podsuwa scenariusz (szersza pula niż zielone: przewaga ≥ 5 pkt, 20 najlepszych na skan, 24 godz., układ 2:1). Bot wchodzi od razu po cenie BingX (poziomy celu i stopu w tych samych % co w aplikacji), a potem przez 3 godziny ocenia wykres jak trader: czeka na wybicie szczytu (dołka) 2 ostatnich świec przy co najmniej 2 z 5 punktów (nie łapie spadającego noża, RSI w dobrym zakresie i w kierunku ruchu, cena po właściwej stronie EMA20, wolumen co najmniej średni, trend 4h nie przeciw). Potwierdzenie = pozycja zostaje. Brak potwierdzenia w 3 godz. = stop przesuwa się na cenę wejścia. Po dojściu do celu nie zamyka – połowa drogi do celu zostaje zabezpieczona, a stop idzie za ceną (1R za najlepszym poziomem), pozycja do 48 godz. Ryzyko 1% na pozycję, maks. 10 pozycji. Konto zresetowane 27.11.2026 (nowa zasada wejścia).', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, trader: true, early: true, resetTag: '2026-11-27-wczesne' },
+  O: { name: 'Kopia aplikacji – tylko OKX Europe', desc: 'Test przed prawdziwym kontem na giełdzie z licencją UE: to samo co F (zielone scenariusze z aplikacji, 24 godz. i 3 dni, cel i stop w tych samych % co w aplikacji), ale tylko coiny, które OKX Europe ma w ofercie X-Perps, i po cenach OKX. Scenariusze z OKX wchodzą zleceniem z limitem po cenie z aplikacji, pozostałe od razu po cenie OKX. Ryzyko 1% na pozycję, maks. 10 pozycji. Start 27.11.2026.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, venue: 'okx' },
+  K: { name: 'Kopia aplikacji – tylko Kraken', desc: 'Jak O, ale tylko coiny z kontraktami perpetual na Krakenie (Kraken Pro, licencja MiFID w UE) i po cenach Krakena. Wszystkie scenariusze wchodzą od razu po cenie Krakena, z celem i stopem w tych samych % co w aplikacji. Ryzyko 1% na pozycję, maks. 10 pozycji. Start 27.11.2026.', riskPct: 0.01, maxOpen: 10, maxOpenRisk: 0.10, dailyLossPct: 0.06, copy: true, venue: 'kraken' },
   G: { name: 'Wskaźniki + filtr modelu', desc: 'Gra z trendem na wykresie godzinowym: trend (EMA20 i EMA50), RSI, wolumen i zmienność (ATR). W trendzie spadkowym czeka na odbicie do EMA20 na słabym wolumenie i wchodzi w shorta, gdy odbicie gaśnie (świeca zamyka się z powrotem pod EMA20, RSI zawraca w dół). W trendzie wzrostowym odwrotnie – long po korekcie. Wchodzi tylko wtedy, gdy model w układzie 2:1 daje w tym kierunku co najmniej 38% (próg opłacalności to ok. 33%). Stop za szczytem (dołkiem) odbicia, cel 2× dalej, po dojściu do celu ciągnie zysk. Eksperyment: tej reguły nie testowaliśmy na historii – wynik na żywo jest testem.', maxOpen: 6, ind: true },
 };
 // konto F: maks. pogorszenie ceny względem aplikacji i czas ważności zlecenia z limitem
@@ -393,7 +396,8 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
   const pass = (p, why) => { skip(why); st.log.unshift(`${stamp(now)} pominięto ${p.base} ${p.dir} (${IV_LABEL[p.iv] || p.iv}): ${why}`); };
   for (const p of picks) {
     const live = byBase.get(E.cleanBase(p.base));
-    if (!live || !(live.price > 0)) { pass(p, 'brak coina na BingX'); continue; }
+    const VN = ACCOUNTS[key].venue ? VENUES[ACCOUNTS[key].venue].name : 'BingX';
+    if (!live || !(live.price > 0)) { pass(p, 'brak coina na ' + VN); continue; }
     if (st.positions.length + st.pending.length >= ACCOUNTS[key].maxOpen) { pass(p, 'maks. liczba pozycji'); continue; }
     const cb = E.cleanBase(p.base);
     if (st.positions.some(x => E.cleanBase(x.base) === cb) || st.pending.some(x => E.cleanBase(x.base) === cb)) { pass(p, 'już ma otwartą pozycję na tym coinie'); continue; }
@@ -406,11 +410,11 @@ async function copyEntries(key, st, hist, byBase, now, skip) {
     }
     const base = { id: `${now}-${live.sym}`, pickId: p.id, pickT: p.t, base: p.base, sym: live.sym, side: p.dir, iv: p.iv, end: p.end, placedAt: now, expires: now + COPY.limitMs, p: p.p, lift: p.lift,
       spreadPct: live.bid > 0 && live.ask > 0 ? +((live.ask - live.bid) / live.price * 100).toFixed(3) : null };
-    if (p.ex !== 'bingx') {
+    if (p.ex !== (ACCOUNTS[key].venue || 'bingx')) {
       // scenariusz z innej giełdy (Binance/OKX): ceny różnią się między giełdami, więc wejście po cenie BingX,
       // a cel i stop w tych samych procentach co w aplikacji
       const k = live.price / p.price, px = fill(live.price, p.dir, true);
-      const o = { ...base, limit: live.price, target: p.target * k, stop: p.stop * k, fillType: 'od razu (scenariusz z ' + (p.ex === 'okx' ? 'OKX' : 'Binance') + ', ceny z BingX)' };
+      const o = { ...base, limit: live.price, target: p.target * k, stop: p.stop * k, fillType: 'od razu (scenariusz z ' + ({ okx: 'OKX', bingx: 'BingX' }[p.ex] || 'Binance') + ', ceny z ' + VN + ')' };
       const r = copyOpen(st, o, px, now, byBase, key);
       if (typeof r === 'string') pass(p, r); else { opened++; if (COPY_CHART[key]) await copyChart(key, o, 'WEJŚCIE – po cenie BingX', { entry: px, entryLabel: 'wejście', checks: `scenariusz z aplikacji (${p.ex === 'okx' ? 'OKX' : 'Binance'}) · ${IV_LABEL[o.iv] || o.iv} · cel i stop w tych samych %` }); }
       continue;
@@ -750,7 +754,26 @@ async function main() {
   const k4Cache = new Map();
   res.klines4h = async sym => { if (!k4Cache.has(sym)) k4Cache.set(sym, await X.bingxKlines(sym, '4h', 60)); return k4Cache.get(sym); };
   const logLen = Object.fromEntries(Object.keys(ACCOUNTS).map(k => [k, (state.accounts[k].log || []).length]));
-  for (const key of Object.keys(ACCOUNTS)) console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, byBase, barsFor, now));
+  // konta O i K: ceny i świece z OKX / Krakena
+  const VCTX = {};
+  for (const v of new Set(Object.values(ACCOUNTS).map(a => a.venue).filter(Boolean))) {
+    try {
+      const tk = await VENUES[v].tickers(); if (!tk.length) throw new Error('pusta lista');
+      const vc = new Map();
+      VCTX[v] = { byBase: new Map(tk.map(t => [E.cleanBase(t.base), t])), barsFor: async sym => {
+        if (!vc.has(sym)) { let k1 = null, k5 = null;
+          try { k1 = await VENUES[v].klines(sym, '1h', 200); } catch (e) { }
+          try { k5 = await VENUES[v].klines(sym, '5m', 288); } catch (e) { }
+          vc.set(sym, mergeBars(k1, k5, now)); }
+        return vc.get(sym); } };
+    } catch (e) { console.log(`Ceny ${VENUES[v].name} niedostępne: ${e.message}`); }
+  }
+  for (const key of Object.keys(ACCOUNTS)) {
+    const v = ACCOUNTS[key].venue;
+    if (v && !VCTX[v]) { console.log(`Bot (na sucho) ${key}: pominięte – brak cen ${VENUES[v].name}`); continue; }
+    const cx = v ? VCTX[v] : { byBase, barsFor };
+    console.log('Bot (na sucho) ' + await runAccount(key, state.accounts[key], res, cx.byBase, cx.barsFor, now));
+  }
   state.updatedAt = now;
   saveState(path.join(OUT_DIR, 'bot.json'), state);
   await sendTelegram(buildNotice(state, logLen, now));
