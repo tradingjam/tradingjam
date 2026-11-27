@@ -616,7 +616,7 @@ function Consent({ onAccept }) {
   return (
     <SafeAreaView style={s.root}>
       <ScrollView contentContainerStyle={s.page}>
-        <Text style={s.title}>Zanim zaczniesz</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}><Text style={s.title}>Zanim zaczniesz</Text><LangButton /></View>
         <Text style={[s.li, { marginTop: 12 }]}>TradingJam to narzędzie <Text style={{ fontWeight: '800' }}>statystyczne i edukacyjne</Text>. Pokazuje, jak w przeszłości kończyły się podobne układy wykresów kryptowalut.</Text>
         <Text style={s.li}>• To <Text style={{ fontWeight: '800' }}>nie jest</Text> porada inwestycyjna, doradztwo ani rekomendacja kupna czy sprzedaży.</Text>
         <Text style={s.li}>• Wyniki są takie same dla wszystkich i nie uwzględniają Twojej sytuacji finansowej.</Text>
@@ -634,9 +634,21 @@ const CONSENT_KEY = 'tj_consent_v1';
 const readConsent = () => { try { return typeof localStorage !== 'undefined' && localStorage.getItem(CONSENT_KEY) === '1'; } catch (e) { return false; } };
 const saveConsent = () => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(CONSENT_KEY, '1'); } catch (e) { } };
 
+// Język: wersja angielska (App.en.js) jest generowana z tego pliku przez scripts/make-en.js; przełącznik działa po zbudowaniu
+const LANG = 'pl';
+function LangButton() {
+  if (!globalThis.__tjSetLang) return null;
+  return (
+    <TouchableOpacity onPress={() => globalThis.__tjSetLang(LANG === 'pl' ? 'en' : 'pl')} accessibilityLabel="Language"
+      style={{ height: 24, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: C.mute, fontSize: 11, fontWeight: '800' }}>{LANG === 'pl' ? 'EN' : 'PL'}</Text>
+    </TouchableOpacity>
+  );
+}
 function ThemePicker({ value, onChange }) {
   return (
     <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+      <LangButton />
       {Object.entries(THEMES).map(([k, t]) => (
         <TouchableOpacity key={k} onPress={() => onChange(k)} accessibilityLabel={`Motyw: ${t.name}`}
           style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: t.bg, borderWidth: value === k ? 2 : 1, borderColor: value === k ? C.accent : C.line, alignItems: 'center', justifyContent: 'center' }}>

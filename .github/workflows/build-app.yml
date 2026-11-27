@@ -38,6 +38,8 @@ jobs:
           npx expo install react-dom react-native-web @expo/metro-runtime
           sed -i "s#https://raw.githubusercontent.com/TWOJ_LOGIN/tradingjam/data/results.json#https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data/results.json#" App.js
           grep -n "RESULTS_URL =" App.js
+          # wersja angielska: App.en.js + engine.en.js ze słownika app/i18n/en.json, App.js wybiera język
+          node ../scripts/make-en.js . --switch
           node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('app.json'));j.expo.experiments={...(j.expo.experiments||{}),baseUrl:'/'+process.argv[1]};fs.writeFileSync('app.json',JSON.stringify(j,null,2))" "${GITHUB_REPOSITORY#*/}"
 
       - name: Wersja web (iPhone i przeglądarka)
