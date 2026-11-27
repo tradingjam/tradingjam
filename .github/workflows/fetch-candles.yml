@@ -1,0 +1,24 @@
+name: fetch-candles
+on:
+  workflow_dispatch:
+    inputs:
+      sym: { description: 'symbol', required: true, default: 'HYPEUSDT' }
+      start: { description: 'start ms', required: true }
+      end: { description: 'end ms', required: true }
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch
+        run: |
+          mkdir out
+          for host in data-api.binance.vision api.binance.com; do
+            for s in ${{ inputs.sym }} BTCUSDT; do
+              for iv in 1h 4h; do
+                curl -sf "https://$host/api/v3/klines?symbol=$s&interval=$iv&startTime=${{ inputs.start }}&endTime=${{ inputs.end }}&limit=1000" -o out/$s-$iv.json || true
+              done
+            done
+            ls -la out; [ -s out/${{ inputs.sym }}-1h.json ] && break
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: candles, path: out }
