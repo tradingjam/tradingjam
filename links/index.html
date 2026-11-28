@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>tradingjam · linki</title>
+<meta name="description" content="tradingjam – trading na liczbach. Darmowa aplikacja ze statystykami rynku krypto. Edukacja, nie porada inwestycyjna.">
+<meta property="og:title" content="tradingjam">
+<meta property="og:description" content="Trading na liczbach: prawdopodobieństwo, statystyka, edukacja.">
+<meta property="og:image" content="logo.png">
+<meta name="theme-color" content="#0a0c11">
+<link rel="icon" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<style>
+  :root{--bg:#0a0c11;--card:#141821;--card2:#1b2030;--line:#262c3b;--text:#eef0f4;--muted:#949cad;--orange:#f5a400;--green:#2ecc71;--red:#eb4d4b}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  body{min-height:100vh;display:flex;justify-content:center;padding:48px 18px calc(40px + env(safe-area-inset-bottom))}
+  .bg{position:fixed;inset:0;z-index:-1;overflow:hidden;background:radial-gradient(60% 40% at 50% 0%,rgba(245,164,0,.14),transparent 70%),var(--bg)}
+  .bg svg{position:absolute;left:0;right:0;bottom:6%;width:100%;height:38%;opacity:.12}
+  main{width:100%;max-width:520px}
+  header{text-align:center}
+  .avatar{width:104px;height:104px;border-radius:50%;margin:0 auto 18px;padding:3px;background:conic-gradient(from 200deg,var(--orange),#ffcf66,var(--orange));box-shadow:0 10px 40px rgba(245,164,0,.25)}
+  .avatar img{width:100%;height:100%;border-radius:50%;display:block;background:#000;border:3px solid var(--bg)}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em}
+  .tag{display:inline-block;margin-top:10px;padding:6px 14px;border:1.5px solid var(--orange);border-radius:99px;color:var(--orange);font-size:12px;font-weight:700;letter-spacing:.14em}
+  .bio{margin:14px auto 0;max-width:400px;color:var(--muted);font-size:16px;line-height:1.5}
+  .bio em{font-family:Georgia,"Times New Roman",serif;color:var(--text);font-style:italic}
+  .warn{margin:18px auto 0;max-width:420px;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;justify-content:center}
+  .warn b{color:var(--text)}
+  h2{margin:34px 0 14px;text-align:center;font-size:15px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+  .links{display:flex;flex-direction:column;gap:12px}
+  a.btn,details.btn{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:18px;background:var(--card);border:1px solid var(--line);color:var(--text);text-decoration:none;transition:transform .15s ease,border-color .15s ease,background .15s ease}
+  a.btn:hover,a.btn:active{transform:translateY(-2px);border-color:#3a4256;background:var(--card2)}
+  a.btn.main{background:var(--orange);border-color:var(--orange);color:#111}
+  a.btn.main .sub{color:rgba(0,0,0,.65)}
+  a.btn.main .ic{background:rgba(0,0,0,.12)}
+  .ic{flex:0 0 48px;height:48px;border-radius:13px;background:#0d1016;display:grid;place-items:center}
+  .ic svg{width:26px;height:26px}
+  .txt{flex:1;min-width:0}
+  .t{font-size:17px;font-weight:700}
+  .sub{margin-top:3px;font-size:13px;color:var(--muted)}
+  .arr{opacity:.5;font-size:20px}
+  .soon{opacity:.55;pointer-events:none}
+  .soon .pill{font-size:11px;font-weight:700;letter-spacing:.08em;padding:4px 8px;border-radius:99px;background:var(--card2);color:var(--muted)}
+  details.btn{flex-direction:column;align-items:stretch;cursor:pointer}
+  details.btn summary{list-style:none;display:flex;align-items:center;gap:14px}
+  details.btn summary::-webkit-details-marker{display:none}
+  details.btn ol{margin:12px 4px 4px 66px;color:var(--muted);font-size:14px;line-height:1.7}
+  details.btn ol b{color:var(--text)}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:28px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 8px;text-align:center}
+  .stat b{display:block;font-size:20px;font-weight:800}
+  .stat span{font-size:12px;color:var(--muted)}
+  footer{margin-top:36px;text-align:center;color:#5c6475;font-size:12px;line-height:1.6}
+  footer b{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true">
+  <svg viewBox="0 0 400 120" preserveAspectRatio="none" id="chart"></svg>
+</div>
+<main>
+  <header>
+    <div class="avatar"><img src="logo.png" alt="logo tradingjam"></div>
+    <h1>tradingjam</h1>
+    <div class="tag">TRADING NA LICZBACH</div>
+    <p class="bio">Rynek to nie zgadywanie, tylko <em>prawdopodobieństwo</em>.<br>Darmowa aplikacja ze statystykami krypto i lekcje o myśleniu jak trader.</p>
+    <p class="warn">🔒 <span>To są <b>jedyne oficjalne linki</b> tradingjam. Nikt od nas nie prosi o pieniądze ani klucze API.</span></p>
+  </header>
+
+  <h2>Aplikacja</h2>
+  <div class="links">
+    <a class="btn main" href="https://tradingjam.github.io/tradingjam/">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2" stroke-linecap="round"><path d="M4 18l5-6 4 3 7-9"/><path d="M15 6h5v5"/></svg></span>
+      <span class="txt"><span class="t" style="display:block">Otwórz aplikację</span><span class="sub" style="display:block">w przeglądarce · za darmo</span></span>
+      <span class="arr">→</span>
+    </a>
+    <a class="btn" href="https://github.com/tradingjam/tradingjam/releases/latest/download/tradingjam.apk">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2" stroke-linecap="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg></span>
+      <span class="txt"><span class="t" style="display:block">Pobierz na Androida</span><span class="sub" style="display:block">plik APK · najnowsza wersja</span></span>
+      <span class="arr">↓</span>
+    </a>
+    <details class="btn">
+      <summary>
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#eef0f4" stroke-width="2" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></span>
+        <span class="txt"><span class="t" style="display:block">Na iPhone'a</span><span class="sub" style="display:block">dodaj do ekranu początkowego</span></span>
+        <span class="arr">＋</span>
+      </summary>
+      <ol>
+        <li>Otwórz aplikację w <b>Safari</b>.</li>
+        <li>Stuknij <b>Udostępnij</b> (kwadrat ze strzałką).</li>
+        <li>Wybierz <b>Do ekranu początkowego</b>.</li>
+      </ol>
+    </details>
+  </div>
+
+  <h2>Społeczność</h2>
+  <div class="links">
+    <a class="btn" href="https://www.instagram.com/_tradingjam_/">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#f5a400" stroke-width="2"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="#f5a400" stroke="none"/></svg></span>
+      <span class="txt"><span class="t" style="display:block">Instagram</span><span class="sub" style="display:block">@_tradingjam_ · rolki i karuzele</span></span>
+      <span class="arr">→</span>
+    </a>
+    <a class="btn" href="https://ig.me/m/_tradingjam_">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#eef0f4" stroke-width="2" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg></span>
+      <span class="txt"><span class="t" style="display:block">Napisz do mnie</span><span class="sub" style="display:block">wiadomość na Instagramie</span></span>
+      <span class="arr">→</span>
+    </a>
+    <div class="btn soon" style="display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:18px;background:var(--card);border:1px solid var(--line)">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#6aa8ff" stroke-width="2" stroke-linejoin="round"><path d="M21 4L3 11l6 2 2 6 3-4 5 4z"/></svg></span>
+      <span class="txt"><span class="t" style="display:block">Telegram z botem</span><span class="sub" style="display:block">każdy ruch bota z wykresem</span></span>
+      <span class="pill">WKRÓTCE</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>co 1 h</b><span>skan rynku</span></div>
+    <div class="stat"><b>1%</b><span>ryzyka na pozycję</span></div>
+    <div class="stat"><b>0 zł</b><span>za aplikację</span></div>
+  </div>
+
+  <footer>
+    <b>Edukacja, nie porada inwestycyjna.</b><br>
+    Trading wiąże się z ryzykiem utraty kapitału. Wyniki z przeszłości nie gwarantują przyszłych.<br><br>
+    © tradingjam
+  </footer>
+</main>
+<script>
+  // delikatny wykres w tle
+  (function(){
+    var s=document.getElementById('chart'),n=40,w=400/n,p=60,h='';
+    var r=function(){return Math.random()};
+    for(var i=0;i<n;i++){var o=p;p+= (r()-0.42)*10;p=Math.max(15,Math.min(105,p));var c=p,up=c<o;
+      var col=up?'#2ecc71':'#eb4d4b',hi=Math.min(o,c)-r()*6,lo=Math.max(o,c)+r()*6,x=i*w+w/2;
+      h+='<line x1="'+x+'" x2="'+x+'" y1="'+hi+'" y2="'+lo+'" stroke="'+col+'" stroke-width="1"/>';
+      h+='<rect x="'+(x-w*0.3)+'" y="'+Math.min(o,c)+'" width="'+(w*0.6)+'" height="'+Math.max(1.5,Math.abs(c-o))+'" fill="'+col+'"/>';}
+    s.innerHTML=h;
+  })();
+</script>
+</body>
+</html>
