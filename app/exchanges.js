@@ -33,7 +33,7 @@ async function binanceGet(path) {
   throw last;
 }
 
-const STABLE = new Set(['USDC', 'FDUSD', 'TUSD', 'BUSD', 'DAI', 'USDP', 'EUR', 'USDE', 'USD1', 'PYUSD', 'XUSD', 'RLUSD', 'AEUR', 'EURI', 'USDS', 'GBP', 'BFUSD', 'USTC', 'PAXG', 'WBTC', 'WBETH', 'BNSOL', 'USDG', 'STETH', 'WSTETH', 'WEETH', 'FDUSD', 'USDQ', 'USDR']);
+const STABLE = new Set(['USDC', 'FDUSD', 'TUSD', 'BUSD', 'DAI', 'USDP', 'EUR', 'USDE', 'USD1', 'PYUSD', 'XUSD', 'RLUSD', 'AEUR', 'EURI', 'USDS', 'GBP', 'BFUSD', 'USTC', 'PAXG', 'WBTC', 'WBETH', 'BNSOL', 'USDG', 'STETH', 'WSTETH', 'WEETH', 'FDUSD', 'USDQ', 'USDR', 'U', 'USD0', 'USDX', 'USDD', 'FRAX', 'LUSD', 'GHO', 'EURC', 'USDT0', 'USDF', 'SUSD', 'CRVUSD', 'DOLA', 'USDB', 'USDA', 'AUSD', 'USDU', 'XAUT']);
 // tokenizowane akcje/ETF (np. TQQQB, SKHYB, KORUB, NVDAX) – to nie są kryptowaluty
 const STOCK_LIST = 'TQQQ SQQQ SOXL SOXS SPY QQQ NVDA TSLA AAPL MSFT AMZN GOOGL GOOG META INTC SKHY COIN MSTR AMD NFLX HOOD CRCL PLTR ORCL AVGO TSM BABA GME AMC SPCX IWM TLT GLD SLV USO '
   + 'KORU INTW SNXX TSLL NVDL NVDU CONL MSTU MSTX MSTZ BITX BITU ETHU SBIT UPRO SPXL SPXS SPXU TNA TZA LABU LABD YINN YANG FNGU FNGD TECL TECS UDOW SDOW TMF TMV '
@@ -44,13 +44,16 @@ const STOCK = new RegExp('^(' + STOCK_LIST.trim().split(/\s+/).join('|') + ')[BX
 // (np. KORUB, INTWB, SNXXB). Znane krypto z końcówką B (BNB, ARB…) mają inne długości lub kategorię.
 const stockLike = (base, cat, onBingx) => base.length === 5 && /^[A-Z]{4}B$/.test(base) && !onBingx && (cat === 'rwa' || cat === 'other' || cat === 'stock');
 const isJunk = base => STABLE.has(base) || STOCK.test(base) || (/(BULL|BEAR)$/.test(base) && base.length > 4);
+// nowe stablecoiny spoza listy: cena przyklejona do 1 $ i prawie bez ruchu w 24 godz.
+const pegged = t => t.price > 0.99 && t.price < 1.01 && Math.abs(t.chg || 0) < 0.3;
 
 async function binanceTickers() {
   const all = await binanceGet('/api/v3/ticker/24hr');
   return all
     .filter(t => t.symbol.endsWith('USDT') && +t.quoteVolume > 0 && +t.count > 0)
     .map(t => ({ ex: 'binance', sym: t.symbol, base: t.symbol.slice(0, -4), price: +t.lastPrice, chg: +t.priceChangePercent, qv: +t.quoteVolume }))
-    .filter(t => !isJunk(t.base));
+    
+    .filter(t => !isJunk(t.base) && !pegged(t));
 }
 
 async function binanceKlines(sym, iv, total) {
@@ -109,7 +112,7 @@ async function bingxTickers() {
     .filter(t => /^[A-Z0-9]{2,20}-USDT$/.test(t.symbol))
     .map(bingxTickerRow)
     // pomijamy kontrakty na akcje/forex/surowce (NCSK…, NCFX…, NCCO…, NCSI…) i stablecoiny
-    .filter(t => !/^NC(SK|FX|CO|SI)/.test(t.base) && !isJunk(t.base) && t.qv > 0 && isFinite(t.price));
+    .filter(t => !/^NC(SK|FX|CO|SI)/.test(t.base) && !isJunk(t.base) && !pegged(t) && t.qv > 0 && isFinite(t.price));
 }
 
 async function bingxTicker(sym) {
@@ -219,7 +222,7 @@ async function okxTickers() {
   return (d || []).filter(t => /^[A-Z0-9]{2,20}-USDT$/.test(t.instId)).map(t => {
     const last = +t.last, open = +t.open24h;
     return { ex: 'okx', sym: t.instId, base: t.instId.split('-')[0], price: last, chg: open > 0 ? (last / open - 1) * 100 : 0, qv: +t.volCcy24h };
-  }).filter(t => !isJunk(t.base) && !okxStock(t.base) && t.qv > 0 && isFinite(t.price));
+  }).filter(t => !isJunk(t.base) && !pegged(t) && !okxStock(t.base) && t.qv > 0 && isFinite(t.price));
 }
 async function okxKlines(sym, iv, total) {
   const want = Math.min(total, OKX_MAX); const map = new Map(); let after = null;
