@@ -1,0 +1,12 @@
+name: stop-review
+on: workflow_dispatch
+jobs:
+  r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: |
+          git fetch origin data --depth 1 && git show origin/data:history.json > /tmp/history.json
+          node scripts/stop-review.js /tmp/history.json
