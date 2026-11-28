@@ -427,6 +427,9 @@ async function worker() {
           const cf = {}; for (const rule of ['break']) { const c = confirmSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, rule); cf[rule] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           for (const [nm, em, tr, sw] of [['tr2', 'now', null], ['tTr1', 'now', 'r1'], ['tHalf', 'now', 'half'], ['swPlus', 'now', 'half', 'plus'], ['swReq', 'now', 'half', 'req'], ['swReqV', 'now', 'half', 'reqV'], ['swBlock', 'now', 'half', 'block']]) { const c = traderSim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, em, 6, tr, sw || null); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
           for (const [nm, w, md] of [['eCut3', 3, 'cut'], ['eCut6', 6, 'cut'], ['eBe3', 3, 'be']]) { const c = earlySim(k, r.i, rw.atr * SCALE, LEV, side === 'L', H, IA, 2, w, md); cf[nm] = c ? [c.R, k.t[Math.min(r.i + c.bars, n - 1)] + STEP] : null; }
+          for (const m of [1.25, 1.5, 2]) { const L2 = [LEV[0], LEV[1] * m]; const nm = String(m).replace('.', '');
+            const fa = tradeSim(k, r.i, rw.atr * SCALE, L2, side === 'L', H, false), fb = tradeSim(k, r.i, rw.atr * SCALE, L2, side === 'L', H, true);
+            cf['F' + nm] = fa ? [fa.R, k.t[Math.min(r.i + fa.bars, n - 1)] + STEP] : null; cf['H' + nm] = fb ? [fb.R, k.t[Math.min(r.i + fb.bars, n - 1)] + STEP] : null; }
           const swF = sweepAt(k, r.i, rw.atr * SCALE, side === 'L', IA, false);
           const lvF = levelAt(k, r.i, rw.atr * SCALE, side === 'L', LEV[0]);
           if (!k._rsi) { const c = k.c, m = c.length, rs = new Array(m).fill(50); let g = 0, l = 0; for (let x = 1; x < m; x++) { const d = c[x] - c[x - 1], u = Math.max(d, 0), dn = Math.max(-d, 0); if (x <= 14) { g += u / 14; l += dn / 14; } else { g = (g * 13 + u) / 14; l = (l * 13 + dn) / 14; } if (x >= 14) rs[x] = l === 0 ? 100 : 100 - 100 / (1 + g / l); } k._rsi = rs; }
@@ -755,6 +758,12 @@ async function main() {
     const avg = (A, f) => (A.reduce((q, x) => q + f(x), 0) / (A.length || 1)).toFixed(2);
     for (const [nm, key] of [['na drodze do celu', 'lvP'], ['przy celu', 'lvT']]) { const y = picks.filter(x => x[key]), no = picks.filter(x => !x[key]);
       console.log(`LVL scenariusze z poziomem ${nm}: ${y.length} z ${picks.length} · F śr. ${avg(y, x => x.RF)}R, H śr. ${avg(y, x => x.RH)}R, trafione ${(y.filter(x => x.RF > 0).length / (y.length || 1) * 100).toFixed(0)}% · bez poziomu: F śr. ${avg(no, x => x.RF)}R, H śr. ${avg(no, x => x.RH)}R, trafione ${(no.filter(x => x.RF > 0).length / (no.length || 1) * 100).toFixed(0)}%`); }
+    console.log('\n--- Szerszy stop (cel bez zmian, to samo ryzyko w $ – mniejsza pozycja) ---');
+    const STN = { F: 'F stop 1× (jak teraz)', F125: 'F stop 1,25×', F15: 'F stop 1,5×', F2: 'F stop 2×', 'H|LT': 'H stop 1× + filtr dołka', 'H125|LT': 'H stop 1,25× + filtr', 'H15|LT': 'H stop 1,5× + filtr', 'H2|LT': 'H stop 2× + filtr' };
+    for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of Object.entries(STN)) {
+      const r = fhSim(picks, w, a, b, 2, 0);
+      console.log(`STP ${lbl.padEnd(16)} ${nm.padEnd(26)}: ${String(r.n).padStart(4)} tr. · na plus ${(r.win * 100).toFixed(0)}% · śr. ${r.avR >= 0 ? '+' : ''}${r.avR.toFixed(2)}R · ${r.geo >= 0 ? '+' : ''}${r.geo.toFixed(1)}% / mies. · maks. spadek ${r.dd.toFixed(1)}%`);
+    }
     console.log('\n--- Giełdy z licencją UE: tylko coiny z OKX Europe (O) albo z Krakena (K) ---');
     const VNN = { F: 'F kopia aplikacji (wszystkie coiny)', H: 'H ciągnięcie (wszystkie)', 'H|LT': 'H + filtr podwójnego dołka (obecne H)', 'F|OK': 'O = F tylko coiny OKX Europe', 'H|OK': 'O + ciągnięcie', 'H|LT+OK': 'O + ciągnięcie + filtr dołka', 'F|KR': 'K = F tylko coiny Kraken', 'H|KR': 'K + ciągnięcie', 'H|LT+KR': 'K + ciągnięcie + filtr dołka', 'F|LT+OK': 'O + filtr dołka (bez ciągnięcia)' };
     for (const [lbl, a, b] of [['cały test', from, to], ['1. połowa', from, (from + to) / 2], ['2. połowa', (from + to) / 2, to], ['ostatnie 30 dni', to - 30 * 864e5, to]]) for (const [w, nm] of Object.entries(VNN)) {
